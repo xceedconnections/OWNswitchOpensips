@@ -162,6 +162,13 @@ ensure_column() {
 }
 # Avoid backticks around column names — bash treats them as command substitution.
 ensure_column subscriber password "password VARCHAR(64) NOT NULL DEFAULT ''"
+# OpenSIPS stock schema uses CHAR(25); widen so portal plaintext passwords are not truncated
+# (calculate_ha1=1 reads password_column — truncated secrets break Eyebeam REGISTER).
+if mysql_scalar "SELECT 1 FROM information_schema.columns WHERE table_schema='${DB_OPENSIPS}' AND table_name='subscriber' AND column_name='password' AND (data_type='char' OR (data_type='varchar' AND character_maximum_length < 64))" | grep -q 1; then
+  log_info "Widening ${DB_OPENSIPS}.subscriber.password to VARCHAR(64)"
+  mysql_root "${DB_OPENSIPS}" -e "ALTER TABLE \`subscriber\` MODIFY COLUMN password VARCHAR(64) NOT NULL DEFAULT ''" \
+    || log_warn "ALTER subscriber.password VARCHAR(64) failed"
+fi
 ensure_column subscriber media_policy 'media_policy VARCHAR(32) DEFAULT NULL'
 ensure_column subscriber dtmf_pass 'dtmf_pass TINYINT(1) DEFAULT 1'
 ensure_column subscriber cid_mode 'cid_mode VARCHAR(32) DEFAULT NULL'

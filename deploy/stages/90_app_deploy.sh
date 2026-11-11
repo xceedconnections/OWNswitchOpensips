@@ -272,4 +272,15 @@ else
   admin_hook "$release"
 fi
 
+# Re-push portal SIP accounts → opensips.subscriber (plaintext password for calculate_ha1=1).
+# Safe/idempotent; recovers rows lost to prior provisioner failures (e.g. dtmf_pass SQL 1366).
+if (( ! placeholder )) && [[ -f "${CURRENT}/bin/sync-opensips-sip-users.php" ]]; then
+  log_info "Syncing SIP users into OpenSIPS subscriber table"
+  if run_as_app php "${CURRENT}/bin/sync-opensips-sip-users.php"; then
+    note_change "synced opensips.subscriber from sip_accounts"
+  else
+    log_warn "sync-opensips-sip-users.php failed (REGISTER may break until re-run)"
+  fi
+fi
+
 log_ok "Application release $(basename "$release") live at ${CURRENT}"
