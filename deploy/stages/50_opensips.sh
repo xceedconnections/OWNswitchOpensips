@@ -56,14 +56,29 @@ MOD_SO="$(find /usr/lib /usr/lib64 -type f -name tm.so -path '*opensips/modules*
 OPENSIPS_MPATH="$(dirname "$MOD_SO")/"
 export OPENSIPS_MPATH
 log_info "OPENSIPS_MPATH=${OPENSIPS_MPATH}"
+# proto_udp / proto_tcp are compiled into the OpenSIPS 3.6 binary on apt.opensips.org
+# (loadmodule "proto_udp.so" still works; there is no .so file on disk).
 for so in db_mysql.so auth.so auth_db.so usrloc.so registrar.so dialog.so permissions.so \
-          drouting.so acc.so mi_fifo.so proto_udp.so proto_tcp.so signaling.so \
+          drouting.so acc.so mi_fifo.so signaling.so \
           sl.so tm.so rr.so maxfwd.so sipmsgops.so cfgutils.so; do
   [[ -f "${OPENSIPS_MPATH}${so}" ]] || die "Missing required module: ${OPENSIPS_MPATH}${so}"
 done
-if [[ ! -f "${OPENSIPS_MPATH}rtpengine.so" ]]; then
-  die "Missing rtpengine.so under ${OPENSIPS_MPATH} (expected in base opensips package)"
+for so in rtpengine.so nathelper.so; do
+  [[ -f "${OPENSIPS_MPATH}${so}" ]] || die "Missing required module: ${OPENSIPS_MPATH}${so}"
+done
+# Sanity: builtin UDP transport must be loadable even without a .so file
+cat >/tmp/ownswitch-proto-check.cfg <<EOF
+mpath="${OPENSIPS_MPATH}"
+socket=udp:127.0.0.1:5098
+loadmodule "proto_udp.so"
+loadmodule "sl.so"
+route { send_reply(200,"OK"); }
+EOF
+if ! opensips -c -f /tmp/ownswitch-proto-check.cfg >/tmp/ownswitch-proto-check.out 2>&1; then
+  cat /tmp/ownswitch-proto-check.out >&2 || true
+  die "OpenSIPS cannot load builtin proto_udp — check opensips package"
 fi
+rm -f /tmp/ownswitch-proto-check.cfg /tmp/ownswitch-proto-check.out
 if [[ ! -f "${OPENSIPS_MPATH}cgrates.so" ]]; then
   log_warn "cgrates.so missing — billing auth in opensips.cfg may fail until opensips-cgrates-module is installed"
 fi
