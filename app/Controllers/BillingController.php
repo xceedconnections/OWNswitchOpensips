@@ -172,12 +172,23 @@ final class BillingController extends BaseController
     {
         $o = [];
         try {
-            $svc = new CarrierBalanceService($this->db());
-            foreach ($this->db()->query('SELECT id, name FROM carriers ORDER BY name LIMIT 500')->fetchAll() as $c) {
-                $bal = $svc->balance((int) $c['id']);
-                $o[$c['id']] = $c['name'] . ' (balance ' . $bal . ')';
-            }
+            $rows = $this->db()->query('SELECT id, name FROM carriers ORDER BY name LIMIT 500')->fetchAll() ?: [];
         } catch (\Throwable) {
+            return [];
+        }
+        $balances = [];
+        try {
+            $ids = array_map(static fn ($c) => (int) $c['id'], $rows);
+            $balances = (new CarrierBalanceService($this->db()))->balancesFor($ids);
+        } catch (\Throwable) {
+            $balances = [];
+        }
+        foreach ($rows as $c) {
+            $id = (int) $c['id'];
+            $bal = $balances[$id] ?? null;
+            $o[$id] = $bal !== null
+                ? ((string) $c['name'] . ' (balance ' . $bal . ')')
+                : (string) $c['name'];
         }
         return $o;
     }

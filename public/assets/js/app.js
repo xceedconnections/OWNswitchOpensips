@@ -43,6 +43,49 @@
         sel.addEventListener('change', function () { if (sel.form) { sel.form.submit(); } });
     });
 
+    // Billing → Refills: show users OR providers based on account type (CSP blocks inline JS).
+    (function () {
+        var form = document.querySelector('form[data-refill-form]');
+        if (!form) { return; }
+        var target = form.querySelector('[data-refill-target]');
+        var custPane = form.querySelector('[data-refill-pane="customer"]');
+        var provPane = form.querySelector('[data-refill-pane="provider"]');
+        var emailPane = form.querySelector('#refill-pane-email');
+        var cust = form.querySelector('[data-refill-customer]');
+        var prov = form.querySelector('[data-refill-provider]');
+        var email = form.querySelector('[data-refill-email]');
+        var emailsOn = form.getAttribute('data-refill-emails') === '1';
+        if (!target || !custPane || !provPane || !cust || !prov) { return; }
+
+        var sync = function () {
+            var provider = target.value === 'provider';
+            custPane.classList.toggle('d-none', provider);
+            provPane.classList.toggle('d-none', !provider);
+            if (emailPane) { emailPane.classList.toggle('d-none', provider); }
+
+            cust.disabled = provider;
+            cust.required = !provider;
+            prov.disabled = !provider;
+            prov.required = provider;
+
+            if (provider) {
+                cust.value = '';
+                if (email) {
+                    email.checked = false;
+                    email.disabled = true;
+                }
+            } else {
+                prov.value = '';
+                if (email) {
+                    email.disabled = !emailsOn;
+                }
+            }
+        };
+
+        target.addEventListener('change', sync);
+        sync();
+    })();
+
     // Close mobile offcanvas after nav click; keep accordion chevron state in sync
     var sidebar = document.getElementById('osSidebar');
     if (sidebar && window.bootstrap) {
