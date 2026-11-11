@@ -1,0 +1,47 @@
+<?php
+/** @var array $customers @var array $values @var list<string> $errors @var bool $refillEmailsEnabled */
+$refillEmailsEnabled = !empty($refillEmailsEnabled);
+$sendEmail = (($values['send_email'] ?? '0') === '1');
+?>
+<div class="os-page-head">
+    <div>
+        <h1 class="os-page-title">Refills</h1>
+        <p class="os-page-sub">Posts an append-only ledger entry — mistakes are fixed with a reversal</p>
+    </div>
+</div>
+<?php foreach ($errors as $err): ?><div class="alert alert-danger py-2"><?= e($err) ?></div><?php endforeach; ?>
+<?php if (!$customers): ?>
+    <div class="os-panel"><div class="os-empty"><div class="os-empty-title">No customers</div><div>Create a customer first.</div></div></div>
+<?php else: ?>
+<form method="post" action="<?= e(url('/billing/refill')) ?>" class="os-panel col-12 p-3 p-md-4">
+    <?= csrf_field() ?>
+    <input type="hidden" name="nonce" value="<?= e(bin2hex(random_bytes(8))) ?>">
+    <div class="mb-3"><label class="form-label fw-semibold" for="customer_id">Customer</label>
+        <select class="form-select" id="customer_id" name="customer_id" required><option value="">— select —</option>
+            <?php foreach ($customers as $id => $n): ?><option value="<?= e($id) ?>"<?= (string) $values['customer_id'] === (string) $id ? ' selected' : '' ?>><?= e($n) ?></option><?php endforeach; ?>
+        </select></div>
+    <div class="mb-3"><label class="form-label fw-semibold" for="type">Type</label>
+        <select class="form-select" id="type" name="type">
+            <option value="topup"<?= $values['type'] === 'topup' ? ' selected' : '' ?>>Top-up (credit)</option>
+            <option value="adjustment"<?= $values['type'] === 'adjustment' ? ' selected' : '' ?>>Adjustment (+/-)</option>
+            <option value="refund"<?= $values['type'] === 'refund' ? ' selected' : '' ?>>Refund (debit)</option>
+        </select></div>
+    <div class="mb-3"><label class="form-label fw-semibold" for="amount">Amount</label>
+        <input class="form-control" id="amount" name="amount" value="<?= e($values['amount']) ?>" inputmode="decimal" maxlength="20" required>
+        <div class="form-text">Positive decimal, up to 6 places. Adjustments may be negative.</div></div>
+    <div class="mb-3"><label class="form-label fw-semibold" for="description">Description / reason</label>
+        <input class="form-control" id="description" name="description" value="<?= e($values['description']) ?>" maxlength="200" required></div>
+    <div class="mb-3">
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="send_email" name="send_email" value="1"<?= $sendEmail ? ' checked' : '' ?><?= $refillEmailsEnabled ? '' : ' disabled' ?>>
+            <label class="form-check-label" for="send_email">Send email upon refill</label>
+        </div>
+        <?php if ($refillEmailsEnabled): ?>
+            <div class="form-text">Sends only if the user has a valid email address and has not opted out on My profile.</div>
+        <?php else: ?>
+            <div class="form-text">Enable SMTP and “Allow refill emails” under Settings → Email first.</div>
+        <?php endif; ?>
+    </div>
+    <button class="btn btn-primary" type="submit" data-once><i class="bi bi-wallet2 me-1"></i>Post entry</button>
+</form>
+<?php endif; ?>

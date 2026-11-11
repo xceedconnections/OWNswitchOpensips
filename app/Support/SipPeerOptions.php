@@ -1,0 +1,88 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ownswitch\Support;
+
+/**
+ * Shared SIP peer option lists for Trunks and SIP Users (OpenSIPS / Sofia).
+ */
+final class SipPeerOptions
+{
+    public const YES_NO = ['yes' => 'Yes', 'no' => 'No'];
+
+    public const DTMF = [
+        'RFC2833' => 'RFC2833 / telephone-event',
+        'info' => 'SIP INFO',
+        'inband' => 'Inband',
+        'auto' => 'Auto',
+    ];
+
+    /** Allow (pass) or block DTMF toward the far end (INFO + telephone-event). */
+    public const DTMF_PASS = [
+        'yes' => 'Allow DTMF (press 1 works)',
+        'no' => 'Block DTMF (keys ignored)',
+    ];
+
+    public const CALLER_ID_MODE = [
+        'passthrough' => 'ViciDial / softphone (caller ID number)',
+        'fixed' => 'Portal forced (SIP user CallerID number)',
+        'display_name' => 'Display name',
+        'rpid' => 'Remote-Party-ID header (RPID)',
+        'pai' => 'P-Asserted-Identity header (PAI)',
+    ];
+
+    public const PEER_TYPE = [
+        'friend' => 'friend (softphone: register + call)',
+        'peer' => 'peer (IP / PBX outbound)',
+        'user' => 'user (register only)',
+    ];
+
+    /** How the endpoint authenticates to Ownswitch / OpenSIPS. */
+    public const CONNECTION_MODE = [
+        'dynamic' => 'Dynamic (REGISTER + username/password)',
+        'ip' => 'IP based (fixed IP peer / PBX)',
+    ];
+
+    public const PROVIDER_TECH = [
+        'sip' => 'sip',
+        'iax2' => 'iax2',
+    ];
+
+    /** OpenSIPS: force_rport / received via nathelper; comedia ≈ symmetric RTP (relay). */
+    public const NAT = [
+        'no' => 'No',
+        'force_rport' => 'force_rport',
+        'comedia' => 'comedia',
+        'force_rport,comedia' => 'force_rport,comedia',
+    ];
+
+    /** Trust remote port / skip digest on INVITE when IP is in address table. */
+    public const INSECURE = [
+        'no' => 'no',
+        'port' => 'port',
+        'invite' => 'invite',
+        'port,invite' => 'port,invite',
+    ];
+
+    /** Individual codecs for multiselect chips (stored comma-separated). */
+    public static function codecs(): array
+    {
+        return SipCodecs::formOptions();
+    }
+
+    /** @deprecated use codecs() — kept for any old references */
+    public const CODECS = [
+        'PCMU' => 'G.711 μ-law (ulaw / G711)',
+        'PCMA' => 'G.711 A-law (alaw)',
+        'G729' => 'G.729',
+        'GSM' => 'GSM',
+        'OPUS' => 'Opus',
+        'G722' => 'G.722',
+        'iLBC' => 'iLBC',
+        'SPEEX' => 'Speex',
+        'G723' => 'G.723',
+        'G726' => 'G.726',
+        'telephone-event' => 'telephone-event (DTMF)',
+    ];
+}

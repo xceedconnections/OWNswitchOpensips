@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Apply Ownswitch schema migrations from any working directory.
+# Installed to /usr/local/bin/ownswitch-migrate by stage 90.
+#
+#   sudo ownswitch-migrate
+#   sudo ownswitch-migrate --status
+#   sudo ownswitch-migrate --create-db
+#
+# Do not run "php bin/migrate.php" from /root — that path does not exist there.
+set -euo pipefail
+
+ENV_FILE="${OWNSWITCH_ENV_FILE:-/etc/ownswitch/ownswitch.env}"
+APP="$(readlink -f /opt/ownswitch/current 2>/dev/null || true)"
+MIG=""
+if [[ -n "$APP" && -f "${APP}/bin/migrate.php" ]]; then
+  MIG="${APP}/bin/migrate.php"
+elif [[ -f /opt/ownswitch-src/bin/migrate.php ]]; then
+  MIG="/opt/ownswitch-src/bin/migrate.php"
+fi
+
+if [[ -z "$MIG" ]]; then
+  echo "migrate.php not found under /opt/ownswitch/current or /opt/ownswitch-src." >&2
+  echo "Re-run: sudo bash /opt/ownswitch-src/deploy/install.sh --only 90 --yes" >&2
+  exit 1
+fi
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Missing ${ENV_FILE}. Re-run stage 90 before migrating." >&2
+  exit 1
+fi
+
+echo "Running: ${MIG}"
+if [[ "$(id -u)" -eq 0 ]] && id ownswitch >/dev/null 2>&1; then
+  exec runuser -u ownswitch -- env OWNSWITCH_ENV_FILE="$ENV_FILE" php "$MIG" "$@"
+fi
+exec env OWNSWITCH_ENV_FILE="$ENV_FILE" php "$MIG" "$@"

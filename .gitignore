@@ -1,0 +1,36 @@
+# Secrets & local env
+config/.env
+.env
+.env.*
+!.env.example
+_ssh_*.py
+_ssh_*.sh
+deploy/secrets/*
+!deploy/secrets/README.md
+!deploy/secrets/.gitignore
+/etc/
+
+# Runtime / deps
+storage/
+vendor/
+node_modules/
+*.log
+*.tmp
+*.swp
+*~
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# Backups / local dumps
+*.sql.gz
+*.dump
+/backups/
+
+# PHPUnit / coverage if added later
+.phpunit.result.cache
+coverage/
