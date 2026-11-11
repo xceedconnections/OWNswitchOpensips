@@ -303,23 +303,17 @@ final class CustomerController extends CrudController
         } catch (\PDOException) {
         }
 
-        // Ledger is append-only; briefly relax the UPDATE trigger so we can orphan customer_id.
-        $this->relaxLedgerUpdateGuard($pdo);
-
         $pdo->beginTransaction();
         try {
-            // Keep CDR + billing history: detach (NULL) instead of deleting those rows.
-            foreach (['cdrs', 'ledger_entries', 'invoices', 'payments', 'voucher_redemptions', 'fraud_events'] as $table) {
-                try {
-                    $pdo->prepare("UPDATE `{$table}` SET customer_id = NULL WHERE customer_id = ?")->execute([$id]);
-                } catch (\PDOException) {
-                    // table / column may not exist yet
-                }
-            }
+            // Preserve CDRs, report rollups, ledger/refill history (do NOT delete or null customer_id).
+            // Archive the live balance snapshot, then remove only operational rows.
+            $this->archiveCustomerBalance($pdo, $row);
+
             try {
                 $pdo->prepare('UPDATE vouchers SET used_by_customer_id = NULL WHERE used_by_customer_id = ?')->execute([$id]);
             } catch (\PDOException) {
             }
+
             foreach (
                 [
                     'did_assignments',
@@ -371,32 +365,65 @@ final class CustomerController extends CrudController
         return null;
     }
 
-    /** Allow UPDATE that only clears ledger_entries.customer_id (keep append-only for other columns). */
-    private function relaxLedgerUpdateGuard(\PDO $pdo): void
+    /**
+     * Snapshot final wallet into customer_balance_archives (ledger refill/charge rows stay forever).
+     *
+     * @param array<string,mixed> $customer
+     */
+    private function archiveCustomerBalance(\PDO $pdo, array $customer): void
     {
+        $id = (int) $customer['id'];
         try {
-            $pdo->exec('DROP TRIGGER IF EXISTS trg_ledger_no_update');
             $pdo->exec(
-                'CREATE TRIGGER trg_ledger_no_update BEFORE UPDATE ON ledger_entries
-                 FOR EACH ROW
-                 BEGIN
-                   IF NOT (
-                     NEW.customer_id IS NULL
-                     AND OLD.customer_id IS NOT NULL
-                     AND NEW.reseller_id <=> OLD.reseller_id
-                     AND NEW.entry_type <=> OLD.entry_type
-                     AND NEW.amount <=> OLD.amount
-                     AND NEW.currency <=> OLD.currency
-                     AND NEW.affects_balance <=> OLD.affects_balance
-                     AND NEW.reference_entry_id <=> OLD.reference_entry_id
-                     AND NEW.idempotency_key <=> OLD.idempotency_key
-                   ) THEN
-                     SIGNAL SQLSTATE \'45000\' SET MESSAGE_TEXT = \'ledger_entries is append-only: post a reversing entry\';
-                   END IF;
-                 END'
+                'CREATE TABLE IF NOT EXISTS customer_balance_archives (
+                    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    customer_id     BIGINT UNSIGNED NOT NULL,
+                    customer_name   VARCHAR(120) NOT NULL DEFAULT \'\',
+                    customer_code   VARCHAR(64) NULL,
+                    balance         DECIMAL(18,6) NOT NULL DEFAULT 0,
+                    reserved        DECIMAL(18,6) NOT NULL DEFAULT 0,
+                    currency        CHAR(3) NOT NULL DEFAULT \'USD\',
+                    deleted_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                    KEY ix_cba_customer (customer_id),
+                    KEY ix_cba_deleted (deleted_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
             );
         } catch (\Throwable $e) {
-            error_log('[ownswitch] ledger update guard relax: ' . $e->getMessage());
+            error_log('[ownswitch] balance archive schema: ' . $e->getMessage());
+        }
+
+        $balance = '0.000000';
+        $reserved = '0.000000';
+        try {
+            $st = $pdo->prepare('SELECT balance, reserved FROM balances WHERE customer_id = ? LIMIT 1');
+            $st->execute([$id]);
+            $row = $st->fetch(\PDO::FETCH_ASSOC);
+            if (is_array($row)) {
+                $balance = (string) ($row['balance'] ?? '0');
+                $reserved = (string) ($row['reserved'] ?? '0');
+            }
+        } catch (\PDOException) {
+        }
+
+        $currency = (string) ($customer['currency'] ?? 'USD');
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+        try {
+            $pdo->prepare(
+                'INSERT INTO customer_balance_archives
+                    (customer_id, customer_name, customer_code, balance, reserved, currency)
+                 VALUES (?,?,?,?,?,?)'
+            )->execute([
+                $id,
+                mb_substr((string) ($customer['name'] ?? ''), 0, 120),
+                isset($customer['code']) ? mb_substr((string) $customer['code'], 0, 64) : null,
+                $balance,
+                $reserved,
+                $currency,
+            ]);
+        } catch (\Throwable $e) {
+            error_log('[ownswitch] balance archive insert: ' . $e->getMessage());
         }
     }
 }
