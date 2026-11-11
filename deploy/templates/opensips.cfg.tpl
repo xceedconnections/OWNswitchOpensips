@@ -198,8 +198,8 @@ route {
 
 	# ---- in-dialog requests ----
 	if (has_totag()) {
-		# Absorb DTMF (SIP INFO) when this dialog was created with dtmf_pass=no
-		if (is_method("INFO") && $dlg_val(os_dtmf) == "no") {
+		# Absorb DTMF (SIP INFO) when this dialog was created with dtmf_pass=0/no
+		if (is_method("INFO") && ($dlg_val(os_dtmf) == "no" || $dlg_val(os_dtmf) == "0")) {
 			xlog("L_INFO", "DTMF INFO blocked in-dialog for $fU\n");
 			send_reply(200, "OK");
 			exit;
@@ -307,7 +307,7 @@ route {
 		if ($avp(os_dtmf) != NULL) {
 			$dlg_val(os_dtmf) = $avp(os_dtmf);
 		} else {
-			$dlg_val(os_dtmf) = "yes";
+			$dlg_val(os_dtmf) = "1";
 		}
 		do_accounting("db", "cdr|missed|failed");
 		if ($avp(os_media) == NULL || $(avp(os_media){s.len}) == 0) {
@@ -330,11 +330,11 @@ route {
 	$acc_extra(dst) = $rU;
 	$acc_extra(cli) = $dlg_val(os_cli);
 	$acc_extra(ip) = $si;
-	# Persist DTMF policy for in-dialog INFO filtering
+	# Persist DTMF policy for in-dialog INFO filtering (TINYINT 1/0 or legacy yes/no)
 	if ($avp(os_dtmf) != NULL) {
 		$dlg_val(os_dtmf) = $avp(os_dtmf);
 	} else {
-		$dlg_val(os_dtmf) = "yes";
+		$dlg_val(os_dtmf) = "1";
 	}
 
 	# Resolve Softphone Display Name → os_cli / ACC cli BEFORE do_accounting so
@@ -487,10 +487,10 @@ route[inbound_from_carrier_deliver] {
 }
 
 # Direct = skip RTPengine; Relay = rtpengine_manage(); Record = rtpengine + recording
-# dtmf_pass=no → strip telephone-event so RFC2833 DTMF is not negotiated
+# dtmf_pass=0/no → strip telephone-event so RFC2833 DTMF is not negotiated
 route[apply_media] {
 	$var(dtmf_flags) = "";
-	if ($avp(os_dtmf) == "no") {
+	if ($avp(os_dtmf) == "no" || $avp(os_dtmf) == "0") {
 		$var(dtmf_flags) = " codec-strip-telephone-event";
 	}
 	if ($avp(os_media) == "direct") {

@@ -173,8 +173,8 @@ final class OpensipsProvisioner
                 $set['media_policy'] = in_array($mp, ['direct', 'relay', 'record'], true) ? $mp : 'relay';
             }
             if (in_array('dtmf_pass', $cols, true)) {
-                $dp = strtolower(trim((string) ($account['dtmf_pass'] ?? 'yes')));
-                $set['dtmf_pass'] = $dp === 'no' ? 'no' : 'yes';
+                // opensips.subscriber.dtmf_pass is TINYINT(1); portal stores yes/no.
+                $set['dtmf_pass'] = self::yesNoToTinyint($account['dtmf_pass'] ?? 'yes');
             }
             if (in_array('cid_mode', $cols, true)) {
                 $mode = strtolower(trim((string) ($account['caller_id_mode'] ?? '')));
@@ -1829,7 +1829,7 @@ final class OpensipsProvisioner
         }
         foreach ([
             'media_policy VARCHAR(16) NOT NULL DEFAULT \'relay\'',
-            'dtmf_pass VARCHAR(8) NOT NULL DEFAULT \'yes\'',
+            'dtmf_pass TINYINT(1) NOT NULL DEFAULT 1',
             'cid_mode VARCHAR(16) NOT NULL DEFAULT \'passthrough\'',
             'cid_min_len INT UNSIGNED NOT NULL DEFAULT 0',
             'cid_max_len INT UNSIGNED NOT NULL DEFAULT 0',
@@ -2266,6 +2266,30 @@ final class OpensipsProvisioner
         $st = $this->db()->prepare('SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?');
         $st->execute([$table]);
         return (bool) $st->fetchColumn();
+    }
+
+    /**
+     * Map portal yes/no (and common boolish forms) to TINYINT(1) for opensips.subscriber.
+     */
+    public static function yesNoToTinyint(mixed $value, int $default = 1): int
+    {
+        if (is_bool($value)) {
+            return $value ? 1 : 0;
+        }
+        if (is_int($value) || is_float($value)) {
+            return ((int) $value) !== 0 ? 1 : 0;
+        }
+        $s = strtolower(trim((string) $value));
+        if ($s === '' || $s === 'default' || $s === 'auto') {
+            return $default !== 0 ? 1 : 0;
+        }
+        if (in_array($s, ['0', 'no', 'false', 'off', 'n'], true)) {
+            return 0;
+        }
+        if (in_array($s, ['1', 'yes', 'true', 'on', 'y'], true)) {
+            return 1;
+        }
+        return $default !== 0 ? 1 : 0;
     }
 
     private function db(): PDO
