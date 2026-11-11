@@ -131,6 +131,10 @@ modparam("drouting", "db_url", "@@OPENSIPS_DB_URL@@")
 # OpenSIPS 3.6+: gw_id_avp defaults OFF — enable so ACC can store selected trunk (T{id})
 modparam("drouting", "gw_id_avp", "$avp(dr_gw_id)")
 # OpenSIPS 3.x: no gw_attrs_avp modparam — pass $avp(dr_gw_attrs) as do_routing() 5th arg
+# OPTIONS probing for gateways with probe_mode=1 (portal “Probe gateway”)
+modparam("drouting", "probing_interval", 30)
+modparam("drouting", "probing_method", "OPTIONS")
+modparam("drouting", "probing_from", "sip:probe@@@OWNSWITCH_DOMAIN@@")
 
 # Rate CAP check via portal PHP (opensips-module-exec). Optional — stage/deploy installs when available.
 @@OPENSIPS_EXEC_BLOCK@@

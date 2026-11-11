@@ -2072,7 +2072,7 @@ final class OpensipsProvisioner
     /**
      * Single-trunk view used by the trunks list (OpenSIPS drouting probe / OPTIONS fallback).
      *
-     * @return array{label:string,state:string,latency_ms:int,status:string}
+     * @return array{label:string,state:string,latency_ms:int,status:string,online:bool}
      */
     public function gatewayStatus(int $trunkId): array
     {
@@ -2080,13 +2080,131 @@ final class OpensipsProvisioner
         $map = $this->gatewayStatuses();
         $state = strtoupper((string) ($map[$gwid] ?? ''));
         $online = $state !== '' && !preg_match('/INACT|DISABLE|DOWN|OFF|0/', $state);
-        $label = $state !== '' ? ($gwid . '=' . $state) : '';
+        // Do NOT put gwid (T1) in the label — portal “Reg / Latency” must show REGED / Active / ms.
+        $label = $state !== '' ? $state : ($online ? 'Active' : '');
         return [
             'label' => $label,
-            'state' => $state !== '' ? $state : ($online ? 'UP' : ''),
+            'state' => $state !== '' ? $state : ($online ? 'Active' : ''),
             'latency_ms' => 0,
             'status' => $online ? 'UP' : ($state !== '' ? 'DOWN' : ''),
+            'online' => $online,
         ];
+    }
+
+    /**
+     * Outbound REGISTER status from MI reg_list for a Register-mode trunk.
+     *
+     * @return array{label:string,state:string,latency_ms:int,status:string,online:bool,aor:string}
+     */
+    public function registrantStatus(int $trunkId, string $host = '', string $username = ''): array
+    {
+        $host = trim($host);
+        $username = trim($username);
+        $wantAor = ($username !== '' && $host !== '')
+            ? ('sip:' . $username . '@' . $host)
+            : '';
+        $records = $this->registrantRecords();
+        $match = null;
+        foreach ($records as $rec) {
+            $aor = (string) ($rec['aor'] ?? '');
+            if ($wantAor !== '' && strcasecmp($aor, $wantAor) === 0) {
+                $match = $rec;
+                break;
+            }
+            // Fallback: match username@host substring in AOR
+            if ($username !== '' && $host !== ''
+                && stripos($aor, $username . '@' . $host) !== false) {
+                $match = $rec;
+                break;
+            }
+        }
+        if ($match === null && $wantAor === '' && $trunkId > 0) {
+            // Last resort: DB registrant row synced for this trunk
+            try {
+                $table = $this->registrantTable();
+                if ($table !== null) {
+                    $st = $this->db()->query("SELECT aor, registrar, state FROM `{$table}`");
+                    $rows = $st ? ($st->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+                    foreach ($rows as $row) {
+                        $aor = (string) ($row['aor'] ?? '');
+                        foreach ($records as $rec) {
+                            if (strcasecmp((string) ($rec['aor'] ?? ''), $aor) === 0) {
+                                $match = $rec;
+                                break 2;
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        if ($match === null) {
+            return [
+                'label' => 'UNREGED',
+                'state' => 'UNREGED',
+                'latency_ms' => 0,
+                'status' => 'DOWN',
+                'online' => false,
+                'aor' => $wantAor,
+            ];
+        }
+
+        $raw = strtoupper((string) ($match['state'] ?? ''));
+        $enabled = strtolower((string) ($match['enabled'] ?? 'yes'));
+        $registered = str_contains($raw, 'REGISTERED')
+            && !str_contains($raw, 'UNREGISTER')
+            && $enabled !== 'no';
+        $state = $registered ? 'REGED' : (str_contains($raw, 'REGISTERING') ? 'REGISTERING' : 'UNREGED');
+
+        return [
+            'label' => $state,
+            'state' => $state,
+            'latency_ms' => 0,
+            'status' => $registered ? 'UP' : 'DOWN',
+            'online' => $registered,
+            'aor' => (string) ($match['aor'] ?? $wantAor),
+        ];
+    }
+
+    /**
+     * Parse MI reg_list into flat records.
+     *
+     * @return list<array{aor:string,state:string,enabled:string,registrar:string,binding:string}>
+     */
+    public function registrantRecords(): array
+    {
+        $r = $this->miCall('reg_list');
+        if ($r === null || isset($r['error'])) {
+            $r = $this->miCall('uac_reg_list');
+        }
+        if ($r === null || isset($r['error']) || !is_array($r['result'] ?? null)) {
+            return [];
+        }
+        $out = [];
+        $walk = static function ($node) use (&$walk, &$out): void {
+            if (!is_array($node)) {
+                return;
+            }
+            $aor = $node['AOR'] ?? $node['aor'] ?? null;
+            $state = $node['state'] ?? $node['State'] ?? $node['Status'] ?? null;
+            if (is_string($aor) && $aor !== '' && $state !== null) {
+                $out[] = [
+                    'aor' => $aor,
+                    'state' => is_string($state) ? $state : (string) $state,
+                    'enabled' => (string) ($node['enabled'] ?? $node['Enabled'] ?? 'yes'),
+                    'registrar' => (string) ($node['registrar'] ?? $node['Registrar'] ?? ''),
+                    'binding' => (string) ($node['binding'] ?? $node['Binding'] ?? ''),
+                ];
+            }
+            foreach ($node as $v) {
+                if (is_array($v)) {
+                    $walk($v);
+                }
+            }
+        };
+        $walk($r['result']);
+        return $out;
     }
 
     /**

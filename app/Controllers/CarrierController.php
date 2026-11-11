@@ -183,18 +183,20 @@ final class CarrierController extends CrudController
                 $row['latency_ms'] = '—';
                 continue;
             }
-            // REGISTER trunks: drouting / OPTIONS PingTime (ms).
+            // REGISTER trunks: MI reg_list (REGED) + SIP OPTIONS RTT to provider (not gwid T1).
             if ($mode === 'register' && $fsOk) {
-                $st = $prov->gatewayStatus((int) ($row['id'] ?? 0));
-                $state = strtoupper((string) ($st['state'] ?? ''));
-                $ms = (int) ($st['latency_ms'] ?? 0);
-                $online = in_array($state, ['REGED', 'NOREG'], true)
-                    || strtoupper((string) ($st['status'] ?? '')) === 'UP';
-                // Presence-style cell: green/red dot + latency ms (falls back to state label).
+                $user = trim((string) ($row['auth_username'] ?? ''));
+                $st = $prov->registrantStatus((int) ($row['id'] ?? 0), $host, $user);
+                $online = !empty($st['online']);
+                $state = strtoupper((string) ($st['state'] ?? ($online ? 'REGED' : 'UNREGED')));
+                $ms = null;
+                if ($online || strtolower((string) ($row['qualify'] ?? 'yes')) === 'yes') {
+                    $ms = SipOptionsProbe::rttMs($host, $port, 1.5, $user !== '' ? $user : null);
+                }
                 $row['latency_ms'] = [
                     'online' => $online,
-                    'ms' => $ms > 0 ? $ms : null,
-                    'state' => $st['label'] !== '' ? (string) $st['label'] : $state,
+                    'ms' => ($ms !== null && $ms > 0) ? $ms : null,
+                    'state' => $online ? 'REGED' : $state,
                 ];
                 $row['register_status'] = $state;
                 continue;
@@ -204,8 +206,18 @@ final class CarrierController extends CrudController
                 $row['latency_ms'] = '—';
                 continue;
             }
+            // IP / Invite trunks: drouting Active + OPTIONS signalling latency
+            $gw = $fsOk ? $prov->gatewayStatus((int) ($row['id'] ?? 0)) : ['online' => false, 'state' => ''];
             $ms = SipOptionsProbe::rttMs($host, $port);
-            $row['latency_ms'] = ($ms !== null) ? $ms : 'n/a';
+            if ($fsOk && !empty($gw['online'])) {
+                $row['latency_ms'] = [
+                    'online' => true,
+                    'ms' => ($ms !== null && $ms > 0) ? $ms : null,
+                    'state' => $ms !== null ? 'Active' : ((string) ($gw['state'] ?? 'Active')),
+                ];
+            } else {
+                $row['latency_ms'] = ($ms !== null) ? $ms : 'n/a';
+            }
         }
         unset($row);
         foreach ($rows as &$row) {
@@ -352,7 +364,11 @@ final class CarrierController extends CrudController
             }
             $mode = strtolower((string) ((is_array($row) ? ($row['auth_mode'] ?? null) : null) ?? ($data['auth_mode'] ?? 'ip')));
             if ($mode === 'register') {
-                $st = $prov->gatewayStatus($id);
+                $user = trim((string) ((is_array($row) ? ($row['auth_username'] ?? '') : '') ?: ''));
+                $host = trim((string) ((is_array($row) ? ($row['host'] ?? '') : '') ?: ''));
+                // Give uac_registrant a moment after reg_reload
+                usleep(300000);
+                $st = $prov->registrantStatus($id, $host, $user);
                 return 'Trunk pushed to OpenSIPS. REGISTER state: '
                     . ($st['label'] !== '' ? $st['label'] : 'pending')
                     . ' (REGED = registered to vendor).';
