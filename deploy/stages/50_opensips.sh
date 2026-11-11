@@ -316,8 +316,8 @@ modparam(\"cachedb_redis\", \"cachedb_url\", \"redis:dnc=>${_redis_url}\")"
 		return;
 	}
 	$var(dnc_key) = "ownswitch:dnc:" + $var(dncid);
-	$var(dnc_hit) = NULL;
-	if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_dst)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+	$avp(dnc_hit) = NULL;
+	if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_dst)", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL && $(avp(dnc_hit){s.int}) == 1) {
 		xlog("L_WARN", "SIP DNC hit group=$var(dncid) dst=$var(dnc_dst) — block before trunk\n");
 		acc_db_request("403 Do Not Call", "acc");
 		send_reply(403, "Do Not Call");
@@ -330,8 +330,8 @@ modparam(\"cachedb_redis\", \"cachedb_url\", \"redis:dnc=>${_redis_url}\")"
 		$var(dnc_alt) = "1" + $var(dnc_dst);
 	}
 	if ($var(dnc_alt) != NULL && $(var(dnc_alt){s.len}) >= 3) {
-		$var(dnc_hit) = NULL;
-		if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_alt)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+		$avp(dnc_hit) = NULL;
+		if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_alt)", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL && $(avp(dnc_hit){s.int}) == 1) {
 			xlog("L_WARN", "SIP DNC hit (NANP alt) group=$var(dncid) dst=$var(dnc_dst) alt=$var(dnc_alt)\n");
 			acc_db_request("403 Do Not Call", "acc");
 			send_reply(403, "Do Not Call");
@@ -355,8 +355,8 @@ route[check_dnc] {
 		return;
 	}
 	$var(dnc_key) = "ownswitch:dnc:" + $var(dncid);
-	$var(dnc_hit) = NULL;
-	if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_dst)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+	$avp(dnc_hit) = NULL;
+	if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_dst)", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL && $(avp(dnc_hit){s.int}) == 1) {
 		xlog("L_WARN", "Trunk DNC hit group=$var(dncid) dst=$var(dnc_dst) — instant block (no vendor)\n");
 		acc_db_request("403 Do Not Call", "acc");
 		send_reply(403, "Do Not Call");
@@ -369,8 +369,8 @@ route[check_dnc] {
 		$var(dnc_alt) = "1" + $var(dnc_dst);
 	}
 	if ($var(dnc_alt) != NULL && $(var(dnc_alt){s.len}) >= 3) {
-		$var(dnc_hit) = NULL;
-		if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_alt)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+		$avp(dnc_hit) = NULL;
+		if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_alt)", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL && $(avp(dnc_hit){s.int}) == 1) {
 			xlog("L_WARN", "Trunk DNC hit (NANP alt) group=$var(dncid) dst=$var(dnc_dst) alt=$var(dnc_alt)\n");
 			acc_db_request("403 Do Not Call", "acc");
 			send_reply(403, "Do Not Call");
