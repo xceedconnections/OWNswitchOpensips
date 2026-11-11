@@ -109,7 +109,7 @@ final class CarrierController extends CrudController
                 'max' => DelayedBye::MAX_SECONDS,
                 'default' => '0',
                 'list' => true,
-                'help' => 'Additional seconds to delay BYE toward this vendor after the real hangup. 0 = off (unless Delayed Bye MCD is set). Customer charges stay on actual talk time.',
+                'help' => 'Extra seconds OpenSIPS holds BYE toward this vendor after the customer hangs up. 0 = off (unless Delayed Bye MCD is set). Customer charges stay on actual talk time.',
                 'section' => 'Delayed Bye',
             ],
             [
@@ -120,7 +120,7 @@ final class CarrierController extends CrudController
                 'max' => DelayedBye::MAX_SECONDS,
                 'default' => '0',
                 'list' => true,
-                'help' => 'Minimum duration used to calculate the extension. Example: MCD 25 with an 8s call delays ~17s so the carrier records ~25s. Extension = max(0, MCD − actual) + Delayed Bye. 0 = disabled unless Delayed Bye > 0.',
+                'help' => 'Minimum connected duration target. Example: MCD 25 with an 8s call holds ~17s so the carrier records ~25s. Hold = max(0, MCD − actual) + Delayed Bye. 0 = off unless Delayed Bye > 0.',
                 'section' => 'Delayed Bye',
             ],
             [

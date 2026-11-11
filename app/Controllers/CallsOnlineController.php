@@ -87,18 +87,57 @@ final class CallsOnlineController extends BaseController
         return $this->redirect($r, '/calls-online', $ext !== '' ? 'Monitor extension saved.' : 'Monitor extension cleared.');
     }
 
-    /** Spy / Whisper / Barge need a media server; OpenSIPS signalling-only builds do not support eavesdrop. */
+    /** Admin Spy / Whisper / Barge via RTPengine media subscribe + INVITE to monitor extension. */
     public function monitor(Request $r, array $p = []): Response
     {
         $role = (string) ($this->user($r)['role'] ?? '');
         if (!in_array($role, ['super_admin', 'admin'], true)) {
             return $this->forbidden();
         }
+        $mode = strtolower(trim((string) $r->input('mode', 'spy')));
+        if (!in_array($mode, ['spy', 'whisper', 'barge'], true)) {
+            return $this->redirect($r, '/calls-online', 'Invalid monitor mode.', 'danger');
+        }
+        $callId = trim((string) $r->input('callid', ''));
+        $dialogId = trim((string) $r->input('uuid', ''));
+        if ($callId === '') {
+            $callId = trim((string) $r->input('dialog_id', ''));
+        }
+        if (strlen($callId) > 256 || ($callId !== '' && !preg_match('/^[\x21-\x7E]+$/', $callId))) {
+            return $this->redirect($r, '/calls-online', 'Invalid Call-ID.', 'danger');
+        }
+        $ext = trim((string) $r->input('monitor_ext', ''));
+        if ($ext === '') {
+            $ext = trim((string) ($_SESSION['monitor_extension'] ?? ''));
+        }
+        if ($ext === '' || !preg_match('/^[0-9A-Za-z_@.\-\/]+$/', $ext)) {
+            return $this->redirect($r, '/calls-online', 'Set your monitor extension first.', 'danger');
+        }
+        $_SESSION['monitor_extension'] = $ext;
+
+        $prov = OpensipsProvisioner::fromConfig();
+        if (!$prov->enabled()) {
+            return $this->redirect($r, '/calls-online', 'OpenSIPS is not configured.', 'danger');
+        }
+        // Resolve Call-ID from live list when the form only posted dialog id
+        if ($callId === '' && $dialogId !== '') {
+            [$calls] = $this->loadCalls($r, null);
+            foreach ($calls as $c) {
+                if ((string) ($c['dialog'] ?? '') === $dialogId || (string) ($c['callid'] ?? '') === $dialogId) {
+                    $callId = (string) ($c['callid'] ?? '');
+                    break;
+                }
+            }
+        }
+        if ($callId === '') {
+            return $this->redirect($r, '/calls-online', 'Missing Call-ID for monitor.', 'danger');
+        }
+        $res = $prov->monitorCall($callId, $ext, $mode);
         return $this->redirect(
             $r,
             '/calls-online',
-            'Call monitoring (spy/whisper/barge) is not available on OpenSIPS-only installs. Use hangup from this page, or attach a media server.',
-            'warning'
+            $res['ok'] ? $res['detail'] : ('Monitor failed: ' . $res['detail']),
+            $res['ok'] ? 'success' : 'danger'
         );
     }
 

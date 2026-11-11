@@ -57,7 +57,8 @@ sudo -E ./deploy/install.sh --yes
 | Doc | Purpose |
 |---|---|
 | [docs/OPERATOR-GUIDE.md](docs/OPERATOR-GUIDE.md) | Options reference (trunks, SIP users, billing) |
-| [docs/features/DELAYED-BYE.md](docs/features/DELAYED-BYE.md) | Delayed Bye / MCD wiring & billing |
+| [docs/features/DELAYED-BYE.md](docs/features/DELAYED-BYE.md) | Delayed Bye / MCD (SIP hold + billing) |
+| [docs/features/CALL-MONITOR.md](docs/features/CALL-MONITOR.md) | Spy / Whisper / Barge via RTPengine |
 | [BILLING_RULES.md](BILLING_RULES.md) | Increment formula |
 | [PLAN.md](PLAN.md) | Phased plan |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Components & API contracts |

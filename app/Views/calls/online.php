@@ -30,7 +30,7 @@ $monitorExt = (string) ($monitorExt ?? '');
             <input type="text" class="form-control form-control-sm os-mono" id="monitor_ext" name="monitor_ext" value="<?= e($monitorExt) ?>" placeholder="e.g. 1001 or user/1001" maxlength="64">
         </div>
         <div class="col-auto"><button class="btn btn-outline-primary btn-sm" type="submit">Save</button></div>
-        <div class="col-auto small text-muted">Admin only · rings your SIP phone into the live call</div>
+        <div class="col-auto small text-muted">Admin only · Spy listens · Whisper coaches caller · Barge talks to both (call must use media relay/record)</div>
     </div>
 </form>
 <?php endif; ?>

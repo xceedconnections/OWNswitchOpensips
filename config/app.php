@@ -50,7 +50,7 @@ return [
             'tenant'   => Env::get('CGRATES_TENANT', 'cgrates.org'),
         ],
         'rtpengine' => [
-            'host' => Env::get('RTPENGINE_HOST', ''),
+            'host' => Env::get('RTPENGINE_HOST', '127.0.0.1'),
             'port' => (int) Env::get('RTPENGINE_PORT', 22222),
         ],
         // Portal / OpenSIPS DNC hot cache (Redis SET). DB index must not collide with CGRateS (usually 10).

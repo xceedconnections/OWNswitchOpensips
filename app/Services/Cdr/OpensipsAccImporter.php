@@ -233,6 +233,16 @@ final class OpensipsAccImporter
             $duration = (int) round($duration / 1000); // ms → s
         }
         $duration = max(0, min(172800, $duration));
+        // Delayed Bye SIP hold: ACC duration includes hold; "talk" is real customer seconds
+        $talk = (int) ($row['talk'] ?? 0);
+        if ($talk > 100000) {
+            $talk = (int) round($talk / 1000);
+        }
+        $talk = max(0, min(172800, $talk));
+        $carrierDuration = $duration;
+        if ($talk > 0 && $talk <= $duration) {
+            $duration = $talk;
+        }
 
         $disposition = 'FAILED';
         if ($table === 'missed_calls') {
@@ -284,6 +294,10 @@ final class OpensipsAccImporter
         ];
         if ($trunkId !== null) {
             $payload['carrier_trunk_id'] = $trunkId;
+        }
+        // When SIP Delayed Bye held the carrier leg, ACC duration > talk — use it for buy rating
+        if ($disposition === 'ANSWERED' && $carrierDuration > $duration && $talk > 0) {
+            $payload['duration_carrier'] = $carrierDuration;
         }
         return $payload;
     }

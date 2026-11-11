@@ -34,12 +34,12 @@ Practical reference for the portal options — the same material is available in
 | CAP | Skip trunk when buy rate exceeds cap |
 | DNC group | Block listed destinations before INVITE |
 | Max call duration | `max call duration` on gateway leg |
-| **Delayed Bye** | Extra seconds to hold BYE |
-| **Delayed Bye MCD** | Minimum duration for extension math |
+| **Delayed Bye** | Extra seconds OpenSIPS holds BYE toward vendor |
+| **Delayed Bye MCD** | Minimum connected duration for hold math |
 | **Count Delayed duration in Buying** | Extend buy/cost on CDR when checked |
 | Codecs | Gateway absolute codec string |
 
-Full Delayed Bye wiring: [features/DELAYED-BYE.md](features/DELAYED-BYE.md).
+Full Delayed Bye wiring: [features/DELAYED-BYE.md](features/DELAYED-BYE.md). Spy/Whisper/Barge: [features/CALL-MONITOR.md](features/CALL-MONITOR.md).
 
 ## SIP user options (summary)
 

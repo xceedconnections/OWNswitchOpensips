@@ -524,6 +524,14 @@ final class OpensipsProvisioner
         if ($dstfmt !== 'as_is') {
             $parts[] = 'dstfmt=' . $dstfmt;
         }
+        $dbye = \Ownswitch\Support\DelayedBye::clampSeconds($trunk['delayed_bye'] ?? 0);
+        $dmcd = \Ownswitch\Support\DelayedBye::clampSeconds($trunk['delayed_bye_mcd'] ?? 0);
+        if ($dbye > 0) {
+            $parts[] = 'dbye=' . $dbye;
+        }
+        if ($dmcd > 0) {
+            $parts[] = 'dmcd=' . $dmcd;
+        }
         $rawRem = trim((string) ($trunk['remove_prefix'] ?? ''));
         if ($rawRem !== '') {
             $list = [];
@@ -1407,6 +1415,159 @@ final class OpensipsProvisioner
                 . ' — ensure opensips is active and mi_http listens on 127.0.0.1:8888'
                 . ' (sudo bash /opt/ownswitch-src/deploy/fix-opensips-activating.sh)',
         ];
+    }
+
+    /**
+     * Spy / Whisper / Barge into a live call via RTPengine media subscribe + SIP INVITE to the monitor.
+     * Requires the call to be on RTPengine (relay/record). Modes:
+     *   spy     — listen only (both legs forked sendonly)
+     *   whisper — coach the caller leg (bidirectional subscribe to caller from-tag)
+     *   barge   — talk to both legs (bidirectional subscribe to all)
+     *
+     * @return array{ok:bool,detail:string}
+     */
+    public function monitorCall(string $callId, string $monitorExt, string $mode = 'spy'): array
+    {
+        $callId = trim($callId);
+        $monitorExt = trim($monitorExt);
+        $mode = strtolower(trim($mode));
+        if ($callId === '') {
+            return ['ok' => false, 'detail' => 'Missing Call-ID'];
+        }
+        if ($monitorExt === '' || !preg_match('/^[0-9A-Za-z_@.\-\/]+$/', $monitorExt)) {
+            return ['ok' => false, 'detail' => 'Invalid monitor extension'];
+        }
+        if (!in_array($mode, ['spy', 'whisper', 'barge'], true)) {
+            return ['ok' => false, 'detail' => 'Mode must be spy, whisper, or barge'];
+        }
+
+        $extUser = $monitorExt;
+        if (str_contains($extUser, '/')) {
+            $extUser = substr($extUser, strrpos($extUser, '/') + 1);
+        }
+        if (str_contains($extUser, '@')) {
+            $extUser = explode('@', $extUser, 2)[0];
+        }
+        $contacts = $this->registeredContacts();
+        $info = $contacts[strtolower($extUser)] ?? null;
+        if ($info === null) {
+            return ['ok' => false, 'detail' => "Monitor extension {$extUser} is not registered on OpenSIPS"];
+        }
+        $contact = trim((string) ($info['contact'] ?? ''));
+        if ($contact === '' || !preg_match('#^sips?:#i', $contact)) {
+            return ['ok' => false, 'detail' => "No SIP Contact for {$extUser}"];
+        }
+        // Prefer received= for NAT softphones when present
+        $received = trim((string) ($info['received'] ?? ''));
+        $requestUri = $contact;
+        if ($received !== '' && preg_match('#sip:(.+)#i', $received, $rm)) {
+            // received is sip:ip:port — keep user from contact
+            if (preg_match('#^(sips?:)([^@;>]+)@#i', $contact, $cm)) {
+                $hostPort = $rm[1];
+                $requestUri = $cm[1] . $cm[2] . '@' . $hostPort;
+            }
+        }
+
+        $rtCfg = (array) \Ownswitch\App::config('app.integrations.rtpengine', []);
+        $rtHost = trim((string) ($rtCfg['host'] ?? ''));
+        if ($rtHost === '') {
+            $rtHost = '127.0.0.1';
+        }
+        $rtPort = (int) ($rtCfg['port'] ?? 22222);
+        $rt = new \Ownswitch\Integrations\RTPengine\RtpengineClient($rtHost, $rtPort, 3.0);
+        try {
+            if (!$rt->ping()) {
+                return ['ok' => false, 'detail' => 'RTPengine not responding on ' . $rtHost . ':' . $rtPort];
+            }
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'detail' => 'RTPengine unreachable: ' . $e->getMessage()];
+        }
+
+        $fromTag = '';
+        foreach ($this->listDialogs() as $d) {
+            if (!is_array($d)) {
+                continue;
+            }
+            $cid = (string) ($d['callid'] ?? $d['Call-ID'] ?? $d['call_id'] ?? '');
+            if ($cid === '' || strcasecmp($cid, $callId) !== 0) {
+                continue;
+            }
+            $fromTag = trim((string) ($d['from_tag'] ?? $d['caller_tag'] ?? $d['ftag'] ?? $d['fromtag'] ?? ''));
+            break;
+        }
+
+        $params = ['call-id' => $callId];
+        $flags = [];
+        if ($mode === 'barge') {
+            $flags[] = 'all';
+            $flags[] = 'bidirectional';
+        } elseif ($mode === 'whisper') {
+            if ($fromTag !== '') {
+                $params['from-tags'] = [$fromTag];
+            } else {
+                $flags[] = 'all';
+            }
+            $flags[] = 'bidirectional';
+        } else {
+            $flags[] = 'all';
+        }
+        if ($flags !== []) {
+            $params['flags'] = $flags;
+        }
+
+        try {
+            $sub = $rt->command('subscribe request', $params);
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'detail' => 'RTPengine subscribe failed: ' . $e->getMessage()];
+        }
+        if (($sub['result'] ?? '') !== 'ok') {
+            $why = (string) ($sub['error-reason'] ?? $sub['error'] ?? json_encode($sub));
+            return [
+                'ok' => false,
+                'detail' => 'RTPengine subscribe refused (' . $why . '). Call must use media relay/record (not direct).',
+            ];
+        }
+        $offer = trim((string) ($sub['sdp'] ?? ''));
+        $toTag = trim((string) ($sub['to-tag'] ?? $sub['to_tag'] ?? ''));
+        if ($offer === '' || $toTag === '') {
+            return ['ok' => false, 'detail' => 'RTPengine subscribe returned no SDP/to-tag'];
+        }
+
+        $domain = $this->sipDomain !== '' ? $this->sipDomain : ($this->publicIp !== '' ? $this->publicIp : '127.0.0.1');
+        $localIp = $this->publicIp !== '' ? $this->publicIp : '127.0.0.1';
+        $fromUri = 'sip:monitor@' . $domain;
+        $toUri = 'sip:' . $extUser . '@' . $domain;
+        $uac = new SipInviteClient();
+        $inv = $uac->inviteWithSdp($requestUri, $toUri, $fromUri, $offer, $localIp, 25.0);
+        if (!$inv['ok']) {
+            try {
+                $rt->command('unsubscribe', ['call-id' => $callId, 'to-tag' => $toTag]);
+            } catch (\Throwable) {
+            }
+            return ['ok' => false, 'detail' => $inv['detail']];
+        }
+
+        try {
+            $ans = $rt->command('subscribe answer', [
+                'call-id' => $callId,
+                'to-tag' => $toTag,
+                'sdp' => $inv['sdp'],
+                'flags' => ['trust address', 'allow transcoding'],
+            ]);
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'detail' => 'RTPengine subscribe answer failed: ' . $e->getMessage()];
+        }
+        if (($ans['result'] ?? '') !== 'ok') {
+            $why = (string) ($ans['error-reason'] ?? $ans['error'] ?? 'unknown');
+            return ['ok' => false, 'detail' => 'RTPengine subscribe answer refused: ' . $why];
+        }
+
+        $label = match ($mode) {
+            'whisper' => 'Whisper',
+            'barge' => 'Barge',
+            default => 'Spy',
+        };
+        return ['ok' => true, 'detail' => "{$label} started — ringing/bridged to {$extUser}"];
     }
 
     /**

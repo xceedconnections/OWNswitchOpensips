@@ -107,7 +107,11 @@ final class CdrIngestService
                 }
                 if ($d['carrier_trunk_id'] !== null && ($k = $this->resolver->carrier($d['carrier_trunk_id'], $billDst)) !== null) {
                     // Customer sell uses actual talk time. Buy/cost may use Delayed Bye extension when the trunk checkbox is on.
-                    $carrierDuration = $this->carrierBuyDuration($d['carrier_trunk_id'], $duration);
+                    $carrierDuration = $this->carrierBuyDuration(
+                        $d['carrier_trunk_id'],
+                        $duration,
+                        isset($d['duration_carrier']) ? (int) $d['duration_carrier'] : null
+                    );
                     $kr = $this->rating->rate($k['rate'], $k['initial'], $k['subsequent'], $carrierDuration, $k['connect_fee']);
                     $carrierTotal = $kr['total'];
                     $row = array_merge($row, [
@@ -208,6 +212,8 @@ final class CdrIngestService
             'src' => $str($raw['src'] ?? null, 64), 'sip_call_id' => $str($raw['sip_call_id'] ?? null, 190),
             'setup_at' => $setup, 'answer_at' => $this->ts($raw['answer_at'] ?? null), 'end_at' => $this->ts($raw['end_at'] ?? null),
             'duration' => (int) $dur, 'sip_response' => isset($raw['sip_response']) ? (int) $raw['sip_response'] : null,
+            'duration_carrier' => isset($raw['duration_carrier']) && is_numeric($raw['duration_carrier'])
+                ? max(0, min(172800, (int) $raw['duration_carrier'])) : null,
             'failure_reason' => $str($raw['failure_reason'] ?? null, 190),
             'carrier_trunk_id' => isset($raw['carrier_trunk_id']) && $raw['carrier_trunk_id'] !== '' ? (int) $raw['carrier_trunk_id'] : null,
             'routing_rule_id' => isset($raw['routing_rule_id']) && $raw['routing_rule_id'] !== '' ? (int) $raw['routing_rule_id'] : null,
@@ -326,14 +332,17 @@ final class CdrIngestService
 
     /**
      * Connected seconds used for carrier buy rating.
-     * When the trunk has Delayed Bye enabled and "Count Delayed duration in Buying",
-     * use max(actual, MCD) + Delayed Bye; otherwise use actual talk time.
+     * Prefer ACC duration_carrier when SIP Delayed Bye already held the vendor BYE.
+     * Otherwise, when "Count Delayed duration in Buying" is on, apply the MCD formula.
      */
-    private function carrierBuyDuration(int $trunkId, int $actual): int
+    private function carrierBuyDuration(int $trunkId, int $actual, ?int $durationCarrier = null): int
     {
         $actual = max(0, $actual);
         if ($trunkId <= 0 || $actual <= 0) {
             return $actual;
+        }
+        if ($durationCarrier !== null && $durationCarrier > $actual) {
+            return max(0, min(172800, $durationCarrier));
         }
         try {
             DelayedBye::ensureColumns($this->pdo);

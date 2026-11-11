@@ -30,6 +30,8 @@ mpath="@@OPENSIPS_MPATH@@"
 
 socket=@@SIP_SOCKET_UDP@@
 socket=@@SIP_SOCKET_TCP@@
+# WebRTC dialer (nginx proxies wss://host/sip-ws → this socket)
+@@OPENSIPS_WS_SOCKET_BLOCK@@
 # Primary portal domain + public IP (extra aliases injected by stage 50)
 alias="@@OWNSWITCH_DOMAIN@@"
 alias="@@PUBLIC_IP@@"
@@ -40,6 +42,7 @@ alias="@@PUBLIC_IP@@"
 loadmodule "db_mysql.so"
 loadmodule "proto_udp.so"
 loadmodule "proto_tcp.so"
+@@OPENSIPS_WS_MODULE_BLOCK@@
 loadmodule "signaling.so"
 loadmodule "sl.so"
 
@@ -55,6 +58,8 @@ modparam("rr", "append_fromtag", 0)
 loadmodule "maxfwd.so"
 loadmodule "sipmsgops.so"
 # uri.so removed in OpenSIPS 3.x (helpers live in sipmsgops)
+# async(sleep(...)) for Delayed Bye hold — bundled with opensips base package
+loadmodule "cfgutils.so"
 
 loadmodule "mi_fifo.so"
 modparam("mi_fifo", "fifo_name", "@@OPENSIPS_FIFO@@")
@@ -114,7 +119,8 @@ modparam("acc", "early_media", 0)
 modparam("acc", "report_cancels", 1)
 # OpenSIPS 3.x: extra_fields + $acc_extra(...) — db_extra was removed
 # src = SIP username (attribution); cli = presented CallerID; gw = drouting gwid (T{trunkId})
-modparam("acc", "extra_fields", "db: src->src_user; dst->dst_user; ip->src_ip; cli->cli; gw->gw")
+# talk = customer hangup seconds when Delayed Bye holds the carrier BYE (sell uses talk; ACC duration includes hold)
+modparam("acc", "extra_fields", "db: src->src_user; dst->dst_user; ip->src_ip; cli->cli; gw->gw; talk->talk")
 
 # dynamic routing (carrier selection / failover) - data loaded from the opensips DB
 loadmodule "drouting.so"
@@ -190,6 +196,10 @@ route {
 			exit;
 		}
 		if (loose_route()) {
+			# Delayed Bye: hold customer→carrier BYE so vendor CDR meets MCD + extra
+			if (is_method("BYE")) {
+				route(delayed_bye_hold);
+			}
 			if (is_method("INVITE|ACK|BYE|UPDATE|PRACK") && $avp(os_media) != "direct") {
 				if ($avp(os_media) == "record") {
 					rtpengine_manage("replace-session-connection replace-origin ICE=remove recording-label=$ci");
@@ -361,7 +371,73 @@ route {
 	route(check_rate_cap);
 	route(apply_sip_dst_format);
 	route(apply_trunk_dst_format);
+	route(store_delayed_bye);
 	route(acc_cli_gw);
+	route(relay);
+}
+
+# Persist Delayed Bye / MCD from trunk attrs onto the dialog (seconds; 0 = off)
+route[store_delayed_bye] {
+	$dlg_val(dbye) = "0";
+	$dlg_val(dmcd) = "0";
+	if ($avp(dr_gw_attrs) == NULL) {
+		return;
+	}
+	$var(db) = $(avp(dr_gw_attrs){param.value,dbye});
+	$var(dm) = $(avp(dr_gw_attrs){param.value,dmcd});
+	if ($var(db) != NULL && $(var(db){s.len}) > 0) {
+		$dlg_val(dbye) = $var(db);
+	}
+	if ($var(dm) != NULL && $(var(dm){s.len}) > 0) {
+		$dlg_val(dmcd) = $var(dm);
+	}
+}
+
+# Hold BYE toward the carrier so vendor connected time meets MCD + Delayed Bye.
+# Customer softphone already sent BYE (UI ends); we delay relay until hold expires.
+# ACC "talk" = real customer seconds; ACC duration includes the hold (carrier CDR match).
+route[delayed_bye_hold] {
+	if ($DLG_dir != "downstream") {
+		return;
+	}
+	if ($dlg_val(dbye_done) == "1") {
+		return;
+	}
+	$var(extra) = 0;
+	$var(mcd) = 0;
+	if ($dlg_val(dbye) != NULL && $(dlg_val(dbye){s.len}) > 0) {
+		$var(extra) = $(dlg_val(dbye){s.int});
+	}
+	if ($dlg_val(dmcd) != NULL && $(dlg_val(dmcd){s.len}) > 0) {
+		$var(mcd) = $(dlg_val(dmcd){s.int});
+	}
+	if ($var(extra) <= 0 && $var(mcd) <= 0) {
+		return;
+	}
+	$var(actual) = $DLG_lifetime;
+	$var(hold) = $var(extra);
+	if ($var(mcd) > $var(actual)) {
+		$var(hold) = $var(hold) + ($var(mcd) - $var(actual));
+	}
+	if ($var(hold) <= 0) {
+		return;
+	}
+	if ($var(hold) > 600) {
+		$var(hold) = 600;
+	}
+	$dlg_val(dbye_done) = "1";
+	$dlg_val(os_talk) = $var(actual);
+	$acc_extra(talk) = $var(actual);
+	xlog("L_INFO", "delayed_bye hold=$var(hold)s actual=$var(actual) mcd=$var(mcd) extra=$var(extra) ci=$ci\n");
+	async(sleep($var(hold)), delayed_bye_resume);
+	exit;
+}
+
+route[delayed_bye_resume] {
+	xlog("L_INFO", "delayed_bye resume relaying BYE ci=$ci\n");
+	if (is_method("BYE") && $avp(os_media) != "direct") {
+		rtpengine_manage();
+	}
 	route(relay);
 }
 
@@ -783,6 +859,7 @@ failure_route[carrier_failover] {
 		route(check_rate_cap);
 		route(apply_sip_dst_format);
 		route(apply_trunk_dst_format);
+		route(store_delayed_bye);
 		route(acc_cli_gw);
 		t_on_failure("carrier_failover");
 		t_relay();

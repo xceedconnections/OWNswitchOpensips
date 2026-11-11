@@ -13,11 +13,11 @@ $s = $status;
     <?php if (!empty($s['enabled']) && !empty($s['listening'])): ?>
         <p><span class="badge text-bg-success">Listening</span> SIP over WebSocket is on localhost port 5066. Browsers connect through <span class="os-mono">wss://this-host/sip-ws</span>.</p>
     <?php elseif (!empty($s['enabled'])): ?>
-        <p><span class="badge text-bg-warning">Enabled</span> The proxy is configured. OpenSIPS is not listening on port 5066 yet. Enable again to restart the SIP profile.</p>
+        <p><span class="badge text-bg-warning">Enabled</span> The proxy is configured. OpenSIPS is not listening on port 5066 yet. Click Enable to restart the SIP profile.</p>
     <?php else: ?>
-        <p><span class="badge text-bg-secondary">Off</span> The dialer cannot register until WebRTC is enabled.</p>
+        <p><span class="badge text-bg-secondary">Off</span> Fresh installs enable WebRTC automatically when <span class="os-mono">opensips-websocket-module</span> is present. Click Enable if this host was upgraded without it.</p>
     <?php endif; ?>
-    <p class="small text-muted">Enable opens a local WebSocket for the dialer and allows the microphone on this site. Restarting the SIP profile drops current registrations for a few seconds. Calls from the dialer still follow each SIP user's CLI restriction lists.</p>
+    <p class="small text-muted">WebRTC opens <span class="os-mono">ws:127.0.0.1:5066</span> for the dialer (nginx <span class="os-mono">/sip-ws</span>). Restarting OpenSIPS drops current registrations for a few seconds. Calls still follow each SIP user’s CLI lists.</p>
     <?php if (empty($s['helper'])): ?>
         <div class="alert alert-warning">
             The WebRTC helper is not installed on this server yet. As root run:

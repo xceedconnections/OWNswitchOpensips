@@ -128,25 +128,25 @@ final class DocsCatalog
             ],
             'delayed-bye' => [
                 'title' => 'Delayed Bye & MCD',
-                'summary' => 'Optional buy-cost extension on CDRs to meet vendor MCD; sell side always uses real talk time.',
+                'summary' => 'Hold SIP BYE toward the vendor to meet MCD; sell side always uses real talk time.',
                 'group' => 'Routing',
                 'sections' => [
                     [
                         'heading' => 'What it does',
-                        'html' => '<p>Configured on the <strong>trunk</strong> (Delayed Bye tab). On this OpenSIPS build it is a <strong>billing</strong> control: the portal can extend carrier buy duration so cost matches vendor MCD policies.</p>
-<p><strong>Customer sell charges always use real talk time.</strong> SIP BYE toward the vendor is not held in the proxy script.</p>',
+                        'html' => '<p>Configured on the <strong>trunk</strong> (Delayed Bye tab). When the customer hangs up early, OpenSIPS <strong>holds the BYE toward the vendor</strong> for <code>max(0, MCD − actual) + Delayed Bye</code> seconds so the carrier CDR can show the longer connected time.</p>
+<p><strong>Customer sell charges always use real talk time</strong> (ACC <code>talk</code>). Buy/cost can follow the held duration when “Count Delayed duration in Buying” is checked.</p>',
                     ],
                     [
                         'heading' => 'Fields',
                         'html' => '<table class="table table-sm table-bordered">
 <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
 <tbody>
-<tr><td>Delayed Bye (s)</td><td>Extra seconds always added to the buy-side formula.</td></tr>
-<tr><td>Delayed Bye MCD (s)</td><td>Minimum target duration. Extension includes <code>max(0, MCD − actual)</code>.</td></tr>
-<tr><td>Count Delayed duration in Buying</td><td>If checked, CDR carrier cost uses extended seconds. If unchecked, buy uses actual only.</td></tr>
+<tr><td>Delayed Bye (s)</td><td>Extra seconds always held after hangup.</td></tr>
+<tr><td>Delayed Bye MCD (s)</td><td>Minimum target duration. Hold includes <code>max(0, MCD − actual)</code>.</td></tr>
+<tr><td>Count Delayed duration in Buying</td><td>If checked, CDR carrier cost uses held/extended seconds. If unchecked, buy uses actual only.</td></tr>
 </tbody>
 </table>
-<p>Extension formula: <code>max(0, MCD − actual) + Delayed Bye</code></p>',
+<p>Hold formula: <code>max(0, MCD − actual) + Delayed Bye</code> (capped at 600s in the proxy).</p>',
                     ],
                     [
                         'heading' => 'Examples (MCD = 25, Delayed Bye = 0)',

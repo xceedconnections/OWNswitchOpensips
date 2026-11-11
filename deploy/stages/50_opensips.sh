@@ -59,7 +59,7 @@ export OPENSIPS_MPATH
 log_info "OPENSIPS_MPATH=${OPENSIPS_MPATH}"
 for so in db_mysql.so auth.so auth_db.so usrloc.so registrar.so dialog.so permissions.so \
           drouting.so acc.so mi_fifo.so proto_udp.so proto_tcp.so signaling.so \
-          sl.so tm.so rr.so maxfwd.so sipmsgops.so; do
+          sl.so tm.so rr.so maxfwd.so sipmsgops.so cfgutils.so; do
   [[ -f "${OPENSIPS_MPATH}${so}" ]] || die "Missing required module: ${OPENSIPS_MPATH}${so}"
 done
 if [[ ! -f "${OPENSIPS_MPATH}rtpengine.so" ]]; then
@@ -81,6 +81,8 @@ HAVE_EXEC=0
 [[ -f "${OPENSIPS_MPATH}exec.so" ]] && HAVE_EXEC=1
 HAVE_CGRATES=0
 [[ -f "${OPENSIPS_MPATH}cgrates.so" ]] && HAVE_CGRATES=1
+HAVE_PROTO_WS=0
+[[ -f "${OPENSIPS_MPATH}proto_ws.so" ]] && HAVE_PROTO_WS=1
 
 # ---------------------------------------------------------------------------
 # 4. MySQL schemas for OpenSIPS modules
@@ -123,6 +125,8 @@ ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS cid_max_len INT DEFAULT NULL;
 ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS allow_calls TINYINT(1) DEFAULT 1;
 ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS dst_format VARCHAR(32) DEFAULT NULL;
 ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS dnc_group_id INT DEFAULT NULL;
+ALTER TABLE acc ADD COLUMN IF NOT EXISTS talk INT UNSIGNED DEFAULT NULL;
+ALTER TABLE missed_calls ADD COLUMN IF NOT EXISTS talk INT UNSIGNED DEFAULT NULL;
 SQL
 
 # ---------------------------------------------------------------------------
@@ -218,6 +222,17 @@ export OPENSIPS_RATE_CAP_ROUTE="${OPENSIPS_RATE_CAP_ROUTE:-}"
 
 if ! (( HAVE_CGRATES )); then
   log_warn "opensips-cgrates-module missing — cfg still loads cgrates.so; install package or strip module later"
+fi
+
+# WebRTC (proto_ws) — enabled by default when the module package is present
+if (( HAVE_PROTO_WS )); then
+  export OPENSIPS_WS_MODULE_BLOCK='loadmodule "proto_ws.so"'
+  export OPENSIPS_WS_SOCKET_BLOCK='socket=ws:127.0.0.1:5066'
+  log_info "WebRTC: proto_ws.so present — enabling ws:127.0.0.1:5066"
+else
+  export OPENSIPS_WS_MODULE_BLOCK='# proto_ws.so not installed — install opensips-websocket-module for WebRTC'
+  export OPENSIPS_WS_SOCKET_BLOCK='# socket=ws:127.0.0.1:5066'
+  log_warn "opensips-websocket-module missing — WebRTC dialer needs: apt-get install -y opensips-websocket-module"
 fi
 
 # ---------------------------------------------------------------------------
