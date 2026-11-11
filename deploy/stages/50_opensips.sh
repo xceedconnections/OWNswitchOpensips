@@ -90,7 +90,7 @@ HAVE_MI_HTTP=0
 HAVE_NATHELPER=0
 [[ -f "${OPENSIPS_MPATH}nathelper.so" ]] && HAVE_NATHELPER=1
 HAVE_UAC=0
-[[ -f "${OPENSIPS_MPATH}uac_registrant.so" || -f "${OPENSIPS_MPATH}uac.so" ]] && HAVE_UAC=1
+[[ -f "${OPENSIPS_MPATH}uac_registrant.so" ]] && [[ -f "${OPENSIPS_MPATH}uac_auth.so" ]] && HAVE_UAC=1
 HAVE_ALIAS_DB=0
 [[ -f "${OPENSIPS_MPATH}alias_db.so" ]] && HAVE_ALIAS_DB=1
 HAVE_EXEC=0
@@ -109,8 +109,13 @@ apply_schema() { # module_hint table_name
   if mysql_scalar "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_OPENSIPS}' AND table_name='${table}'" | grep -q 1; then
     return 0
   fi
-  f="$(find /usr/share/opensips /usr/share/opensips-mysql-module /usr/share/doc \
-    -type f \( -iname "${hint}-create.sql" -o -iname "*${hint}*create*.sql" \) 2>/dev/null | head -n1 || true)"
+  # Prefer exact ${hint}-create.sql under the packaged mysql schema dir
+  f="$(find /usr/share/opensips/mysql /usr/share/opensips /usr/share/opensips-mysql-module \
+    -type f -iname "${hint}-create.sql" 2>/dev/null | head -n1 || true)"
+  if [[ -z "${f:-}" ]]; then
+    f="$(find /usr/share/opensips /usr/share/opensips-mysql-module /usr/share/doc \
+      -type f -iname "*${hint}*create*.sql" 2>/dev/null | head -n1 || true)"
+  fi
   if [[ -n "${f:-}" ]]; then
     log_info "Applying schema ${f} → ${DB_OPENSIPS}.${table}"
     mysql_root "${DB_OPENSIPS}" <"$f" || log_warn "schema ${f} returned non-zero"
@@ -118,32 +123,49 @@ apply_schema() { # module_hint table_name
   else
     log_warn "No create SQL found for ${hint} (need table ${table})"
   fi
+  # Return success only when the expected table now exists (MySQL has no ADD IF NOT EXISTS;
+  # re-applying standard-create.sql fails on version and must not mask missing subscriber).
+  if mysql_scalar "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_OPENSIPS}' AND table_name='${table}'" | grep -q 1; then
+    return 0
+  fi
+  return 1
 }
-apply_schema standard version
-apply_schema standard subscriber || apply_schema auth_db subscriber
-apply_schema usrloc location
-apply_schema dialog dialog
-apply_schema permissions address
-apply_schema drouting dr_gateways
-apply_schema acc acc
+apply_schema standard version || true
+apply_schema auth_db subscriber || apply_schema standard subscriber || log_warn "subscriber schema missing"
+apply_schema usrloc location || true
+apply_schema dialog dialog || true
+apply_schema permissions address || true
+apply_schema drouting dr_gateways || true
+apply_schema acc acc || true
 apply_schema alias_db dbaliases || true
-apply_schema uac registrant || apply_schema uac_registrant registrant || true
+apply_schema registrant registrant || apply_schema uac_registrant registrant || true
 
-# Extra columns used by Ownswitch provisioner / auth_db load_credentials
-mysql_root "${DB_OPENSIPS}" <<'SQL' || true
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS `password` VARCHAR(64) NOT NULL DEFAULT '';
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS media_policy VARCHAR(32) DEFAULT NULL;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS dtmf_pass TINYINT(1) DEFAULT 1;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS cid_mode VARCHAR(32) DEFAULT NULL;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS rpid VARCHAR(64) DEFAULT NULL;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS cid_min_len INT DEFAULT NULL;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS cid_max_len INT DEFAULT NULL;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS allow_calls TINYINT(1) DEFAULT 1;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS dst_format VARCHAR(32) DEFAULT NULL;
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS dnc_group_id INT DEFAULT NULL;
-ALTER TABLE acc ADD COLUMN IF NOT EXISTS talk INT UNSIGNED DEFAULT NULL;
-ALTER TABLE missed_calls ADD COLUMN IF NOT EXISTS talk INT UNSIGNED DEFAULT NULL;
-SQL
+# Extra columns used by Ownswitch provisioner / auth_db load_credentials.
+# MySQL 8.x does NOT support "ADD COLUMN IF NOT EXISTS" (that is MariaDB-only).
+ensure_column() {
+  local table=$1 column=$2 ddl=$3
+  if mysql_scalar "SELECT 1 FROM information_schema.columns WHERE table_schema='${DB_OPENSIPS}' AND table_name='${table}' AND column_name='${column}'" | grep -q 1; then
+    return 0
+  fi
+  if ! mysql_scalar "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_OPENSIPS}' AND table_name='${table}'" | grep -q 1; then
+    log_warn "skip column ${table}.${column}: table missing"
+    return 0
+  fi
+  log_info "Adding column ${DB_OPENSIPS}.${table}.${column}"
+  mysql_root "${DB_OPENSIPS}" -e "ALTER TABLE \`${table}\` ADD COLUMN ${ddl}" || log_warn "ALTER ${table}.${column} failed"
+}
+ensure_column subscriber password "`password` VARCHAR(64) NOT NULL DEFAULT ''"
+ensure_column subscriber media_policy 'media_policy VARCHAR(32) DEFAULT NULL'
+ensure_column subscriber dtmf_pass 'dtmf_pass TINYINT(1) DEFAULT 1'
+ensure_column subscriber cid_mode 'cid_mode VARCHAR(32) DEFAULT NULL'
+ensure_column subscriber rpid 'rpid VARCHAR(64) DEFAULT NULL'
+ensure_column subscriber cid_min_len 'cid_min_len INT DEFAULT NULL'
+ensure_column subscriber cid_max_len 'cid_max_len INT DEFAULT NULL'
+ensure_column subscriber allow_calls 'allow_calls TINYINT(1) DEFAULT 1'
+ensure_column subscriber dst_format 'dst_format VARCHAR(32) DEFAULT NULL'
+ensure_column subscriber dnc_group_id 'dnc_group_id INT DEFAULT NULL'
+ensure_column acc talk 'talk INT UNSIGNED DEFAULT NULL'
+ensure_column missed_calls talk 'talk INT UNSIGNED DEFAULT NULL'
 
 # ---------------------------------------------------------------------------
 # 5. Runtime dirs + placeholders for opensips.cfg.tpl
@@ -212,13 +234,14 @@ else
 fi
 
 if (( HAVE_UAC )); then
+  # OpenSIPS 3.6: uac_registrant depends on uac_auth (not legacy uac.so alone).
   export OPENSIPS_UAC_BLOCK='
-loadmodule "uac.so"
+loadmodule "uac_auth.so"
 loadmodule "uac_registrant.so"
 modparam("uac_registrant", "db_url", "'"${OPENSIPS_DB_URL}"'")
 '
 else
-  export OPENSIPS_UAC_BLOCK='# uac_registrant not installed — use Auth mode = IP peer for trunks'
+  export OPENSIPS_UAC_BLOCK='# uac_registrant/uac_auth not installed — use Auth mode = IP peer for trunks'
 fi
 
 if (( HAVE_ALIAS_DB )); then
