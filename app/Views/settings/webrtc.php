@@ -15,7 +15,7 @@ $s = $status;
     <?php elseif (!empty($s['enabled'])): ?>
         <p><span class="badge text-bg-warning">Enabled</span> The proxy is configured. OpenSIPS is not listening on port 5066 yet. Click Enable to restart the SIP profile.</p>
     <?php else: ?>
-        <p><span class="badge text-bg-secondary">Off</span> Fresh installs enable WebRTC automatically when <span class="os-mono">opensips-websocket-module</span> is present. Click Enable if this host was upgraded without it.</p>
+        <p><span class="badge text-bg-secondary">Off</span> Fresh installs enable WebRTC when <span class="os-mono">proto_ws.so</span> is available (base opensips / <span class="os-mono">opensips-wss-module</span>). Click Enable if this host was upgraded without it.</p>
     <?php endif; ?>
     <p class="small text-muted">WebRTC opens <span class="os-mono">ws:127.0.0.1:5066</span> for the dialer (nginx <span class="os-mono">/sip-ws</span>). Restarting OpenSIPS drops current registrations for a few seconds. Calls still follow each SIP user’s CLI lists.</p>
     <?php if (empty($s['helper'])): ?>
