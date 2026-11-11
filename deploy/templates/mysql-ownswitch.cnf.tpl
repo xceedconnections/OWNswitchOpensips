@@ -37,3 +37,5 @@ max_heap_table_size     = 64M
 # --- binary log: kept 7 days for point-in-time recovery (see docs/BACKUP.md) ---
 binlog_expire_logs_seconds = 604800
 max_binlog_size         = 256M
+# Allow CREATE TRIGGER / FUNCTION without SUPER (needed for 009_ledger_guard.sql).
+log_bin_trust_function_creators = 1
