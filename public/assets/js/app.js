@@ -43,25 +43,29 @@
         sel.addEventListener('change', function () { if (sel.form) { sel.form.submit(); } });
     });
 
-    // Billing → Refills: show users OR providers based on account type (CSP blocks inline JS).
+    // Billing → Refills: two-card UI — refill type toggles user vs provider fields (CSP-safe).
     (function () {
         var form = document.querySelector('form[data-refill-form]');
-        if (!form) { return; }
-        var target = form.querySelector('[data-refill-target]');
+        var target = document.querySelector('[data-refill-target]');
+        if (!form || !target) { return; }
         var custPane = form.querySelector('[data-refill-pane="customer"]');
         var provPane = form.querySelector('[data-refill-pane="provider"]');
-        var emailPane = form.querySelector('#refill-pane-email');
+        var emailPane = form.querySelector('[data-refill-pane-email]');
         var cust = form.querySelector('[data-refill-customer]');
         var prov = form.querySelector('[data-refill-provider]');
         var email = form.querySelector('[data-refill-email]');
+        var hintCust = document.querySelector('[data-refill-hint="customer"]');
+        var hintProv = document.querySelector('[data-refill-hint="provider"]');
         var emailsOn = form.getAttribute('data-refill-emails') === '1';
-        if (!target || !custPane || !provPane || !cust || !prov) { return; }
+        if (!custPane || !provPane || !cust || !prov) { return; }
 
         var sync = function () {
             var provider = target.value === 'provider';
             custPane.classList.toggle('d-none', provider);
             provPane.classList.toggle('d-none', !provider);
             if (emailPane) { emailPane.classList.toggle('d-none', provider); }
+            if (hintCust) { hintCust.classList.toggle('d-none', provider); }
+            if (hintProv) { hintProv.classList.toggle('d-none', !provider); }
 
             cust.disabled = provider;
             cust.required = !provider;
