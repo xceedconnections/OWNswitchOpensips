@@ -131,7 +131,7 @@ apply_schema uac registrant || apply_schema uac_registrant registrant || true
 
 # Extra columns used by Ownswitch provisioner / auth_db load_credentials
 mysql_root "${DB_OPENSIPS}" <<'SQL' || true
-ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS password VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS `password` VARCHAR(64) NOT NULL DEFAULT '';
 ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS media_policy VARCHAR(32) DEFAULT NULL;
 ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS dtmf_pass TINYINT(1) DEFAULT 1;
 ALTER TABLE subscriber ADD COLUMN IF NOT EXISTS cid_mode VARCHAR(32) DEFAULT NULL;
@@ -190,13 +190,22 @@ else
 fi
 
 if (( HAVE_NATHELPER )); then
+  # OpenSIPS 3.4+: nat_uac_test() takes named flag strings (not legacy bitmask ints).
+  # received_avp is required for fix_nated_register(); usrloc nat_bflag persists the branch flag.
   export OPENSIPS_NATHELPER_BLOCK='
 loadmodule "nathelper.so"
 modparam("nathelper", "natping_interval", 30)
 modparam("nathelper", "ping_nated_only", 1)
+modparam("nathelper", "received_avp", "$avp(received)")
 modparam("nathelper", "sipping_from", "sip:ping@'"${OWNSWITCH_DOMAIN}"'")
+modparam("usrloc", "nat_bflag", "NAT_BFLAG")
+modparam("registrar", "received_avp", "$avp(received)")
 '
-  export OPENSIPS_NAT_REGISTER_BLOCK='if (nat_uac_test("19")) { fix_nated_register(); setbflag(NAT_BFLAG); }'
+  export OPENSIPS_NAT_REGISTER_BLOCK='force_rport();
+		if (nat_uac_test("private-contact,diff-ip-src-via,diff-port-src-via")) {
+			fix_nated_register();
+			setbflag("NAT_BFLAG");
+		}'
 else
   export OPENSIPS_NATHELPER_BLOCK='# nathelper not installed'
   export OPENSIPS_NAT_REGISTER_BLOCK=''
