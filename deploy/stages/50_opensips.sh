@@ -154,7 +154,8 @@ ensure_column() {
   log_info "Adding column ${DB_OPENSIPS}.${table}.${column}"
   mysql_root "${DB_OPENSIPS}" -e "ALTER TABLE \`${table}\` ADD COLUMN ${ddl}" || log_warn "ALTER ${table}.${column} failed"
 }
-ensure_column subscriber password "`password` VARCHAR(64) NOT NULL DEFAULT ''"
+# Avoid backticks around column names — bash treats them as command substitution.
+ensure_column subscriber password "password VARCHAR(64) NOT NULL DEFAULT ''"
 ensure_column subscriber media_policy 'media_policy VARCHAR(32) DEFAULT NULL'
 ensure_column subscriber dtmf_pass 'dtmf_pass TINYINT(1) DEFAULT 1'
 ensure_column subscriber cid_mode 'cid_mode VARCHAR(32) DEFAULT NULL'
@@ -263,10 +264,23 @@ else
   export OPENSIPS_EXEC_BLOCK='# exec not installed'
 fi
 
-# DNC / rate-cap route bodies are optional; empty keeps cfg valid
+# DNC / rate-cap: template always calls these routes — provide no-op stubs so
+# OpenSIPS can start. Real Redis/SQL DNC is applied later by fix-opensips-dnc.sh
+# / portal when cachedb_redis or sqlops is available.
 export OPENSIPS_DNC_MODULES="${OPENSIPS_DNC_MODULES:-}"
-export OPENSIPS_DNC_ROUTE="${OPENSIPS_DNC_ROUTE:-}"
-export OPENSIPS_RATE_CAP_ROUTE="${OPENSIPS_RATE_CAP_ROUTE:-}"
+if [[ -z "${OPENSIPS_DNC_ROUTE:-}" ]]; then
+  export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
+	return;
+}
+route[check_dnc] {
+	return;
+}'
+fi
+if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
+  export OPENSIPS_RATE_CAP_ROUTE='route[check_rate_cap] {
+	return;
+}'
+fi
 
 if ! (( HAVE_CGRATES )); then
   log_warn "opensips-cgrates-module missing — cfg still loads cgrates.so; install package or strip module later"
