@@ -66,13 +66,15 @@ done
 for so in rtpengine.so nathelper.so; do
   [[ -f "${OPENSIPS_MPATH}${so}" ]] || die "Missing required module: ${OPENSIPS_MPATH}${so}"
 done
-# Sanity: builtin UDP transport must be loadable even without a .so file
+# Sanity: builtin UDP transport must be loadable even without a .so file on disk
 cat >/tmp/ownswitch-proto-check.cfg <<EOF
 mpath="${OPENSIPS_MPATH}"
 socket=udp:127.0.0.1:5098
 loadmodule "proto_udp.so"
+loadmodule "signaling.so"
 loadmodule "sl.so"
-route { send_reply(200,"OK"); }
+loadmodule "tm.so"
+route { sl_send_reply(200, "OK"); }
 EOF
 if ! opensips -c -f /tmp/ownswitch-proto-check.cfg >/tmp/ownswitch-proto-check.out 2>&1; then
   cat /tmp/ownswitch-proto-check.out >&2 || true
