@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ownswitch\Controllers;
 
 use Ownswitch\Http\Request;
+use Ownswitch\Http\Response;
 use Ownswitch\Repositories\BaseRepository;
 use Ownswitch\Repositories\PrefixRepository;
 
@@ -51,6 +52,18 @@ final class PrefixController extends CrudController
         ];
     }
 
+    protected function extra(Request $r): array
+    {
+        return [
+            'bulkDelete' => true,
+            'bulkPrefixUpdate' => true,
+            'headerLinks' => [
+                ['href' => '/prefixes/import', 'label' => 'Import', 'icon' => 'upload', 'class' => 'btn-outline-secondary'],
+                ['href' => '/prefixes/export', 'label' => 'Export CSV', 'icon' => 'download', 'class' => 'btn-outline-secondary'],
+            ],
+        ];
+    }
+
     protected function prepare(Request $r, array $data, ?array $existing): array
     {
         $data['destination'] = trim((string) ($data['destination'] ?? ''));
@@ -70,12 +83,109 @@ final class PrefixController extends CrudController
     {
         $row = $this->repo()->findInternal($id);
         if ($row) {
-            // Keep tariff destination labels in sync when the Prefix name changes.
-            $p = (string) $row['prefix'];
-            $d = (string) $row['destination'];
-            $this->db()->prepare('UPDATE rate_plan_tariffs SET destination = ? WHERE prefix = ?')->execute([$d, $p]);
-            $this->db()->prepare('UPDATE carrier_tariffs SET destination = ? WHERE prefix = ?')->execute([$d, $p]);
+            /** @var PrefixRepository $repo */
+            $repo = $this->repo();
+            $repo->syncTariffDestinations([(string) $row['prefix']], (string) $row['destination']);
         }
         return null;
+    }
+
+    /** Delete selected rows or all rows matching current search. */
+    public function bulkDestroy(Request $r, array $p = []): Response
+    {
+        if (!$this->canWrite($r)) {
+            return $this->forbidden();
+        }
+        /** @var PrefixRepository $repo */
+        $repo = $this->repo();
+        $scope = $this->scope($r);
+        $mode = (string) $r->input('mode', 'selected');
+        $qRaw = $r->input('q');
+        if (!is_string($qRaw) || $qRaw === '') {
+            $qRaw = $r->query('q');
+        }
+        $q = is_string($qRaw) ? trim($qRaw) : '';
+        $n = 0;
+
+        if ($mode === 'selected') {
+            $raw = $r->input('ids', []);
+            $ids = is_array($raw) ? $raw : (is_string($raw) ? (preg_split('/[\s,]+/', $raw) ?: []) : []);
+            $idList = array_values(array_unique(array_filter(array_map('intval', $ids), static fn ($i) => $i > 0)));
+            $n = $repo->deleteByIds($scope, $idList);
+        } elseif ($mode === 'filtered') {
+            // Empty search = wipe all prefixes (confirm text shows total count).
+            $n = $repo->deleteFiltered($scope, [], $q !== '' ? $q : null, true);
+        }
+
+        $this->audit($r, 'prefix_bulk_delete', 'prefixes', null, null, [
+            'mode' => $mode, 'count' => $n, 'q' => $q,
+        ]);
+        $qs = $q !== '' ? ('?q=' . rawurlencode($q)) : '';
+        return $this->redirect(
+            $r,
+            $this->base . $qs,
+            "Deleted {$n} " . strtolower($this->plural) . '.',
+            $n > 0 ? 'success' : 'warning'
+        );
+    }
+
+    /**
+     * Bulk-set destination: selected rows and/or dial codes that match (e.g. 1,1213).
+     */
+    public function bulkDestinationUpdate(Request $r, array $p = []): Response
+    {
+        if (!$this->canWrite($r)) {
+            return $this->forbidden();
+        }
+        /** @var PrefixRepository $repo */
+        $repo = $this->repo();
+        $destination = trim((string) $r->input('destination', ''));
+        if ($destination === '') {
+            return $this->redirect($r, $this->base, 'Destination name is required.', 'danger');
+        }
+        $matchRaw = trim((string) $r->input('prefix_match', ''));
+        $matchMode = (string) $r->input('prefix_mode', 'starts') === 'exact' ? 'exact' : 'starts';
+        $qRaw = $r->input('q');
+        if (!is_string($qRaw) || $qRaw === '') {
+            $qRaw = $r->query('q');
+        }
+        $q = is_string($qRaw) ? trim($qRaw) : '';
+
+        $updated = [];
+        if ($matchRaw !== '') {
+            $codes = preg_split('/[\s,;]+/', $matchRaw) ?: [];
+            $updated = $repo->updateDestinationByPrefixMatch($codes, $destination, $matchMode);
+        } else {
+            $raw = $r->input('ids', []);
+            $ids = is_array($raw) ? $raw : (is_string($raw) ? (preg_split('/[\s,]+/', $raw) ?: []) : []);
+            $idList = array_values(array_unique(array_filter(array_map('intval', $ids), static fn ($i) => $i > 0)));
+            if ($idList === []) {
+                return $this->redirect(
+                    $r,
+                    $this->base,
+                    'Select rows or enter matching prefixes (e.g. 1,1213).',
+                    'warning'
+                );
+            }
+            $updated = $repo->updateDestinationByIds($idList, $destination);
+        }
+
+        if ($updated !== []) {
+            $repo->syncTariffDestinations($updated, $destination);
+        }
+
+        $this->audit($r, 'prefix_bulk_destination', 'prefixes', null, null, [
+            'destination' => $destination,
+            'prefix_match' => $matchRaw,
+            'prefix_mode' => $matchMode,
+            'updated' => count($updated),
+        ]);
+        $qs = $q !== '' ? ('?q=' . rawurlencode($q)) : '';
+        return $this->redirect(
+            $r,
+            $this->base . $qs,
+            'Updated destination on ' . count($updated) . ' ' . strtolower($this->plural) . '.',
+            $updated !== [] ? 'success' : 'warning'
+        );
     }
 }

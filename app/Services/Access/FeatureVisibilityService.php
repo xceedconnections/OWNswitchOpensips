@@ -48,7 +48,6 @@ final class FeatureVisibilityService
             'menu.clients.web_dialer' => ['Web-Dialer', 'admin', '/web-dialer', 'Clients'],
             'menu.clients.calls_online' => ['Calls Online', 'admin', '/calls-online', 'Clients'],
             'menu.clients.ip_endpoints' => ['IP Endpoints', 'admin', '/ip-endpoints', 'Clients'],
-            'menu.clients.callerid' => ['CallerID', 'admin', '/callerid-groups', 'Clients'],
             'menu.dids.providers' => ['DID Providers', 'admin', '/did-providers', 'DIDs'],
             'menu.dids.dids' => ['DIDs', 'admin', '/dids', 'DIDs'],
             'menu.dids.assignments' => ['My DIDs', 'admin', '/did-assignments', 'DIDs'],
@@ -88,6 +87,7 @@ final class FeatureVisibilityService
             'menu.settings.stir' => ['STIR/SHAKEN', 'admin', '/settings/stir-shaken', 'Settings'],
             'menu.settings.webrtc' => ['WebRTC', 'admin', '/settings/webrtc', 'Settings'],
             'menu.settings.cli' => ['CLI Restriction', 'admin', '/cli-restrictions', 'Settings'],
+            'menu.settings.callerid' => ['CallerID', 'admin', '/callerid-groups', 'Settings'],
             'menu.settings.dnc' => ['DNC', 'admin', '/dnc', 'Settings'],
             'menu.settings.firewall' => ['Firewall', 'admin', '/settings/firewall', 'Settings'],
             'menu.settings.version' => ['Update', 'admin', '/settings/version', 'Settings'],
@@ -133,7 +133,6 @@ final class FeatureVisibilityService
             '/web-dialer' => 'menu.clients.web_dialer',
             '/calls-online' => 'menu.clients.calls_online',
             '/ip-endpoints' => 'menu.clients.ip_endpoints',
-            '/callerid-groups' => 'menu.clients.callerid',
             '/did-providers' => 'menu.dids.providers',
             '/dids' => 'menu.dids.dids',
             '/did-assignments' => 'menu.dids.assignments',
@@ -174,6 +173,7 @@ final class FeatureVisibilityService
             '/settings/stir-shaken' => 'menu.settings.stir',
             '/settings/webrtc' => 'menu.settings.webrtc',
             '/cli-restrictions' => 'menu.settings.cli',
+            '/callerid-groups' => 'menu.settings.callerid',
             '/dnc' => 'menu.settings.dnc',
             '/settings/firewall' => 'menu.settings.firewall',
             '/settings/version' => 'menu.settings.version',
@@ -248,12 +248,18 @@ final class FeatureVisibilityService
                 $on = isset($defaultOff[$key]) ? 0 : 1;
                 $ins->execute([$key, $audience, $on]);
             }
-            // DNC moved Routes → Settings; carry prior toggle if present.
+            // DNC / CallerID moved into Settings; carry prior toggles if present.
             $this->pdo->exec(
                 "UPDATE feature_visibility fv
                  INNER JOIN feature_visibility old ON old.feature_key = 'menu.routes.dnc'
                  SET fv.enabled = old.enabled
                  WHERE fv.feature_key = 'menu.settings.dnc'"
+            );
+            $this->pdo->exec(
+                "UPDATE feature_visibility fv
+                 INNER JOIN feature_visibility old ON old.feature_key = 'menu.clients.callerid'
+                 SET fv.enabled = old.enabled
+                 WHERE fv.feature_key = 'menu.settings.callerid'"
             );
         } catch (\Throwable $e) {
             error_log('[ownswitch] feature seed: ' . $e->getMessage());

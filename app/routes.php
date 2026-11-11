@@ -136,7 +136,10 @@ $router->group('', ['auth', 'tenant', 'features', 'csrf'], function (Router $r) 
     // Rates
     $crud($r, '/rate-plans', new RatePlanController(), $STAFF);
     $crud($r, '/plan-prefixes', new PlanPrefixController(), $STAFF);
-    $crud($r, '/prefixes', new PrefixController(), $STAFF);
+    $prefixCrud = new PrefixController();
+    $crud($r, '/prefixes', $prefixCrud, $STAFF);
+    $r->post('/prefixes/bulk-delete', [$prefixCrud, 'bulkDestroy'], [$STAFF]);
+    $r->post('/prefixes/bulk-destination-update', [$prefixCrud, 'bulkDestinationUpdate'], [$STAFF]);
     $areaCodes = new AreaCodeController();
     $r->post('/area-codes/bulk-delete', [$areaCodes, 'bulkDestroy'], [$STAFF]);
     $crud($r, '/area-codes', $areaCodes, $STAFF);

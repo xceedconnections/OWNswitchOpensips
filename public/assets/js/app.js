@@ -731,6 +731,30 @@
         }
     }
 
+    var batchPrefixForm = document.getElementById('os-batch-prefix-form');
+    if (batchPrefixForm) {
+        batchPrefixForm.addEventListener('submit', function (ev) {
+            var match = document.getElementById('prefix_match');
+            var hasMatch = match && String(match.value || '').trim() !== '';
+            var box = document.getElementById('os-batch-prefix-ids');
+            if (!box) { return; }
+            while (box.firstChild) { box.removeChild(box.firstChild); }
+            var n = 0;
+            document.querySelectorAll('.os-bulk-id:checked').forEach(function (cb) {
+                var input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'ids[]';
+                input.value = cb.value;
+                box.appendChild(input);
+                n++;
+            });
+            if (!hasMatch && n === 0) {
+                ev.preventDefault();
+                window.alert('Select at least one row, or enter matching prefixes (e.g. 1,1213).');
+            }
+        });
+    }
+
     // Field "?" help popovers (CRUD + Settings)
     if (window.bootstrap && bootstrap.Popover) {
         document.querySelectorAll('[data-bs-toggle="popover"].os-field-help').forEach(function (el) {

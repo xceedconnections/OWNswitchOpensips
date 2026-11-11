@@ -34,7 +34,6 @@ final class Menu
                 ['Web-Dialer', '/web-dialer', self::SIP_USERS],
                 ['Calls Online', '/calls-online', self::SIP_USERS],
                 ['IP Endpoints', '/ip-endpoints', self::SIP_USERS],
-                ['CallerID', '/callerid-groups', self::STAFF],
             ]],
             ['DIDs', [
                 ['DID Providers', '/did-providers', self::DID_STAFF],
@@ -99,6 +98,7 @@ final class Menu
                 ['STIR/SHAKEN', '/settings/stir-shaken', self::STAFF],
                 ['WebRTC', '/settings/webrtc', self::STAFF],
                 ['CLI Restriction', '/cli-restrictions', self::STAFF],
+                ['CallerID', '/callerid-groups', self::STAFF],
                 ['DNC', '/dnc', self::STAFF],
                 ['Firewall', '/settings/firewall', self::STAFF],
                 ['Update', '/settings/version', self::STAFF],

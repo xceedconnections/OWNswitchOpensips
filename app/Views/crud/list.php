@@ -146,6 +146,8 @@ $colCount = ($hideIdColumn ? 0 : 1) + count($cols) + 1;
 <?php
 $bulkDelete = !empty($bulkDelete);
 $bulkRateUpdate = !empty($bulkRateUpdate);
+$bulkPrefixUpdate = !empty($bulkPrefixUpdate);
+$showBulk = ($bulkDelete || $bulkRateUpdate || $bulkPrefixUpdate) && $canWrite;
 $ownerFilter = $ownerFilter ?? null;
 ?>
 <form method="get" class="os-toolbar row g-2 align-items-end" action="<?= e(url($base)) ?>">
@@ -190,7 +192,7 @@ $ownerFilter = $ownerFilter ?? null;
             <?php endif; ?>
         </div>
     <?php else: ?>
-        <?php if (($bulkDelete || $bulkRateUpdate) && $canWrite): ?>
+        <?php if ($showBulk): ?>
             <form method="post" action="<?= e(url($base . '/bulk-delete')) ?>" id="os-bulk-form">
                 <?= csrf_field() ?>
                 <input type="hidden" name="mode" id="os-bulk-mode" value="selected">
@@ -212,20 +214,25 @@ $ownerFilter = $ownerFilter ?? null;
                         <i class="bi bi-percent me-1"></i>Batch update
                     </button>
                     <?php endif; ?>
-                    <span class="small text-muted">Select rows below<?= $bulkDelete ? ', or delete everything that matches the current filter' : '' ?>.</span>
+                    <?php if ($bulkPrefixUpdate): ?>
+                    <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#os-batch-prefix-modal">
+                        <i class="bi bi-pencil-square me-1"></i>Bulk update destination
+                    </button>
+                    <?php endif; ?>
+                    <span class="small text-muted">Select rows below<?= $bulkDelete ? ', or delete everything that matches the current filter' : '' ?><?= $bulkPrefixUpdate ? '; or match dial codes like 1,1213' : '' ?>.</span>
                 </div>
         <?php endif; ?>
         <div class="os-table-scroll">
             <table class="os-table">
                 <colgroup>
-                    <?php if (($bulkDelete || $bulkRateUpdate) && $canWrite): ?><col style="width:2.25rem"><?php endif; ?>
+                    <?php if ($showBulk): ?><col style="width:2.25rem"><?php endif; ?>
                     <?php if (!$hideIdColumn): ?><col class="os-col-id"><?php endif; ?>
                     <?php foreach ($cols as $_): ?><col><?php endforeach; ?>
                     <col class="os-col-actions">
                 </colgroup>
                 <thead>
                     <tr>
-                        <?php if (($bulkDelete || $bulkRateUpdate) && $canWrite): ?>
+                        <?php if ($showBulk): ?>
                             <th scope="col"><input type="checkbox" class="form-check-input" id="os-bulk-all" aria-label="Select all"></th>
                         <?php endif; ?>
                         <?php if (!$hideIdColumn): ?><th scope="col" class="os-col-id">ID</th><?php endif; ?>
@@ -236,7 +243,7 @@ $ownerFilter = $ownerFilter ?? null;
                 <tbody>
                 <?php foreach ($result['rows'] as $row): ?>
                     <tr>
-                        <?php if (($bulkDelete || $bulkRateUpdate) && $canWrite): ?>
+                        <?php if ($showBulk): ?>
                             <td><input type="checkbox" class="form-check-input os-bulk-id" name="ids[]" value="<?= e((string) $row['id']) ?>" form="os-bulk-form" aria-label="Select <?= e((string) $row['id']) ?>"></td>
                         <?php endif; ?>
                         <?php if (!$hideIdColumn): ?><td class="os-mono os-col-id"><?= e($row['id']) ?></td><?php endif; ?>
@@ -259,7 +266,7 @@ $ownerFilter = $ownerFilter ?? null;
                 </tbody>
             </table>
         </div>
-        <?php if (($bulkDelete || $bulkRateUpdate) && $canWrite): ?></form>
+        <?php if ($showBulk): ?></form>
             <?php if ($bulkRateUpdate):
                 $batchPriceLabel = (string) ($batchPriceLabel ?? 'Sell price');
                 $batchTrunkGroups = $batchTrunkGroups ?? null;
@@ -336,6 +343,44 @@ $ownerFilter = $ownerFilter ?? null;
                         <div class="modal-footer">
                             <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
                             <button type="submit" class="btn btn-primary btn-sm">Update selected</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <?php endif; ?>
+            <?php if ($bulkPrefixUpdate): ?>
+            <div class="modal fade" id="os-batch-prefix-modal" tabindex="-1" aria-labelledby="os-batch-prefix-title" aria-hidden="true">
+                <div class="modal-dialog">
+                    <form method="post" action="<?= e(url($base . '/bulk-destination-update')) ?>" class="modal-content" id="os-batch-prefix-form">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="q" value="<?= e($q) ?>">
+                        <div id="os-batch-prefix-ids"></div>
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="os-batch-prefix-title">Bulk update destination</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p class="small text-muted mb-3">Set the destination name on selected rows, or match dial codes (e.g. <span class="os-mono">1,1213</span>) and update every matching prefix.</p>
+                            <div class="mb-3">
+                                <label class="form-label" for="prefix_destination">New destination</label>
+                                <input type="text" class="form-control form-control-sm" name="destination" id="prefix_destination" required maxlength="120" placeholder="United States">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="prefix_match">Match prefixes (optional)</label>
+                                <input type="text" class="form-control form-control-sm os-mono" name="prefix_match" id="prefix_match" placeholder="1, 1213, 44" maxlength="500">
+                                <div class="form-text">Comma-separated. When set, selected checkboxes are ignored and all matching prefixes are updated.</div>
+                            </div>
+                            <div class="mb-0">
+                                <label class="form-label" for="bulk_prefix_mode">Prefix match</label>
+                                <select name="prefix_mode" id="bulk_prefix_mode" class="form-select form-select-sm">
+                                    <option value="starts">Starts with (1 matches 1, 12, 1213…)</option>
+                                    <option value="exact">Exact codes only</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary btn-sm">Update</button>
                         </div>
                     </form>
                 </div>

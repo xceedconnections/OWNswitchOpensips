@@ -295,25 +295,6 @@ final class CustomerController extends CrudController
         $id = (int) $row['id'];
         $pdo = $this->db();
 
-        // Keep billing history: refuse hard-delete when ledger/invoices/payments exist.
-        foreach (
-            [
-                'ledger_entries' => 'ledger entries',
-                'invoices' => 'invoices',
-                'payments' => 'payments',
-            ] as $table => $label
-        ) {
-            try {
-                $st = $pdo->prepare("SELECT COUNT(*) FROM `{$table}` WHERE customer_id = ?");
-                $st->execute([$id]);
-                if ((int) $st->fetchColumn() > 0) {
-                    return "Cannot delete User: {$label} exist. Set Active → Closed instead (keeps CDR/billing history).";
-                }
-            } catch (\PDOException) {
-                // table may not exist yet
-            }
-        }
-
         $sipUsers = [];
         try {
             $st = $pdo->prepare('SELECT username, domain FROM sip_accounts WHERE customer_id = ?');
@@ -322,11 +303,21 @@ final class CustomerController extends CrudController
         } catch (\PDOException) {
         }
 
+        // Ledger is append-only; briefly relax the UPDATE trigger so we can orphan customer_id.
+        $this->relaxLedgerUpdateGuard($pdo);
+
         $pdo->beginTransaction();
         try {
-            // Detach CDRs (nullable FK) so history remains without blocking delete.
+            // Keep CDR + billing history: detach (NULL) instead of deleting those rows.
+            foreach (['cdrs', 'ledger_entries', 'invoices', 'payments', 'voucher_redemptions', 'fraud_events'] as $table) {
+                try {
+                    $pdo->prepare("UPDATE `{$table}` SET customer_id = NULL WHERE customer_id = ?")->execute([$id]);
+                } catch (\PDOException) {
+                    // table / column may not exist yet
+                }
+            }
             try {
-                $pdo->prepare('UPDATE cdrs SET customer_id = NULL WHERE customer_id = ?')->execute([$id]);
+                $pdo->prepare('UPDATE vouchers SET used_by_customer_id = NULL WHERE used_by_customer_id = ?')->execute([$id]);
             } catch (\PDOException) {
             }
             foreach (
@@ -370,4 +361,34 @@ final class CustomerController extends CrudController
 
         return null;
     }
+
+    /** Allow UPDATE that only clears ledger_entries.customer_id (keep append-only for other columns). */
+    private function relaxLedgerUpdateGuard(\PDO $pdo): void
+    {
+        try {
+            $pdo->exec('DROP TRIGGER IF EXISTS trg_ledger_no_update');
+            $pdo->exec(
+                'CREATE TRIGGER trg_ledger_no_update BEFORE UPDATE ON ledger_entries
+                 FOR EACH ROW
+                 BEGIN
+                   IF NOT (
+                     NEW.customer_id IS NULL
+                     AND OLD.customer_id IS NOT NULL
+                     AND NEW.reseller_id <=> OLD.reseller_id
+                     AND NEW.entry_type <=> OLD.entry_type
+                     AND NEW.amount <=> OLD.amount
+                     AND NEW.currency <=> OLD.currency
+                     AND NEW.affects_balance <=> OLD.affects_balance
+                     AND NEW.reference_entry_id <=> OLD.reference_entry_id
+                     AND NEW.idempotency_key <=> OLD.idempotency_key
+                   ) THEN
+                     SIGNAL SQLSTATE \'45000\' SET MESSAGE_TEXT = \'ledger_entries is append-only: post a reversing entry\';
+                   END IF;
+                 END'
+            );
+        } catch (\Throwable $e) {
+            error_log('[ownswitch] ledger update guard relax: ' . $e->getMessage());
+        }
+    }
 }
+
