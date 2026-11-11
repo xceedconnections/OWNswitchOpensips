@@ -242,10 +242,13 @@ fi
 
 if (( HAVE_UAC )); then
   # OpenSIPS 3.6: uac_registrant depends on uac_auth (not legacy uac.so alone).
+  # timer_interval default is 100s (slow first REGISTER); keep >= hash buckets (2^hash_size).
   export OPENSIPS_UAC_BLOCK='
 loadmodule "uac_auth.so"
 loadmodule "uac_registrant.so"
 modparam("uac_registrant", "db_url", "'"${OPENSIPS_DB_URL}"'")
+modparam("uac_registrant", "hash_size", 1)
+modparam("uac_registrant", "timer_interval", 10)
 '
 else
   export OPENSIPS_UAC_BLOCK='# uac_registrant/uac_auth not installed — use Auth mode = IP peer for trunks'
