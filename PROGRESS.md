@@ -31,7 +31,7 @@ php tests/run.php
 - Full Ubuntu 24.04 installer not executed in this Windows workspace (bash stages syntax-checked by Phase 2 agent; live package names need first-VM validation).
 - Live OpenSIPS / CGRateS / RTPengine / OpenSIPS integration not exercised with real SIP.
 - PHP verified on 8.2.12 XAMPP; production target is 8.3 on Ubuntu.
-- Optional OpenSIPS is source-build gated (`FREESWITCH_ENABLED=1`).
+- SIP edge is OpenSIPS 3.6 via deploy stage 50 (apt.opensips.org).
 - Audio fraud is a pluggable stub — not a trained production model.
 
 ## Next actions for operators

@@ -20,7 +20,7 @@ mysql_native_password   = @@MYSQL_NATIVE_PASSWORD_SWITCH@@
 # --- capacity ---
 # 2000-3000 live calls. Writes arrive at hangup rate, not one connection per call.
 # 500 covers the PHP pool plus admin sessions. The 8 GB buffer pool stays ~25% of a
-# 32 GB host so FreeSWITCH keeps the rest for RTP. A 1 GB redo log stops checkpoint
+# 32 GB host: leave headroom for OpenSIPS + RTPengine. A 1 GB redo log stops checkpoint
 # stalls when many CDRs commit together. Durability stays on (flush every commit).
 max_connections         = 500
 innodb_buffer_pool_size = @@MYSQL_BUFFER_POOL_MB@@M

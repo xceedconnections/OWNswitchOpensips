@@ -125,7 +125,7 @@ all other accounts use `caching_sha2_password`.
 
 Public: `80/tcp`, `443/tcp`, `SIP_PORT udp+tcp`, `RTP_PORT_MIN:MAX/udp`, SSH.
 Loopback only (bound **and** explicitly denied in ufw): MySQL 3306, Redis 6379, CGRateS 2012/2013/2014/2080,
-RTPengine ng 22222/udp, OpenSIPS MI 8021, OpenSIPS MI-HTTP 8888, portal internal vhost 8081.
+RTPengine ng 22222/udp, OpenSIPS MI-HTTP 8888, portal internal vhost 8081.
 `99_health_report.sh` audits `ss -lntu` and **fails** if any of these is bound to a non-loopback address.
 
 Cloud firewalls/security groups must additionally allow the public ports above.

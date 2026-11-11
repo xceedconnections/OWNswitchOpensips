@@ -55,7 +55,7 @@ $cycle = static function () use ($pdo, $ingest, $prepaid, $limit, $spool): int {
     $done = 0;
     $prepaid->expireStale();
 
-    // OpenSIPS acc import is unused once OpenSIPS posts xml_cdr. Skip when that DB is not configured.
+    // Import OpenSIPS accounting rows into the portal CDR queue when the opensips DB is configured.
     try {
         $os = OpensipsProvisioner::fromConfig();
         if ($os->enabled()) {

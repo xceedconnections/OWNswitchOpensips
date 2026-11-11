@@ -26,7 +26,7 @@ All of these are **outside any web root** (nginx serves only `/opt/ownswitch/cur
 | `redis_password` | Redis `requirepass` (CGRateS DataDB, portal cache) |
 | `app_key` | application encryption/signing key |
 | `recording_notify_token` | shared token for RTPengine recording-finished callbacks |
-| `freeswitch_esl_password`, `freeswitch_default_password` | only when `FREESWITCH_ENABLED=1` |
+| *(none for FreeSWITCH)* | This OpenSIPS build does not install FreeSWITCH |
 | `backup_passphrase` | AES-256 key for `ownswitch-backup` archives — **copy it offline** |
 
 Properties:

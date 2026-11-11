@@ -47,7 +47,7 @@ final class DocsCatalog
                     [
                         'heading' => 'What Ownswitch is',
                         'html' => '<p>Ownswitch is a multi-tenant VoIP billing switch. Customers authenticate as <strong>SIP users</strong>, calls are routed through <strong>trunks</strong> (carriers), and every answered call produces a <strong>CDR</strong> with sell (customer) and buy (carrier) amounts.</p>
-<p>Call control runs on <strong>OpenSIPS</strong> (directory + dialplan via the portal). Billing formulas live in the portal (<code>RatingService</code>) so invoices stay consistent.</p>',
+<p>Call control runs on <strong>OpenSIPS</strong> (subscriber / drouting provisioned from the portal). Billing formulas live in the portal (<code>RatingService</code>) so invoices stay consistent.</p>',
                     ],
                     [
                         'heading' => 'Typical setup order',
@@ -128,31 +128,30 @@ final class DocsCatalog
             ],
             'delayed-bye' => [
                 'title' => 'Delayed Bye & MCD',
-                'summary' => 'Hold BYE toward the vendor to meet a minimum duration; optional buy-cost extension on CDRs.',
+                'summary' => 'Optional buy-cost extension on CDRs to meet vendor MCD; sell side always uses real talk time.',
                 'group' => 'Routing',
                 'sections' => [
                     [
                         'heading' => 'What it does',
-                        'html' => '<p>Configured on the <strong>trunk</strong> (Delayed Bye tab). When the customer hangs up early, OpenSIPS keeps the carrier leg alive a bit longer so the vendor’s CDR can show a longer connected time.</p>
-<p><strong>Customer sell charges always use real talk time.</strong> Only carrier buy/cost can optionally follow the extended duration.</p>',
+                        'html' => '<p>Configured on the <strong>trunk</strong> (Delayed Bye tab). On this OpenSIPS build it is a <strong>billing</strong> control: the portal can extend carrier buy duration so cost matches vendor MCD policies.</p>
+<p><strong>Customer sell charges always use real talk time.</strong> SIP BYE toward the vendor is not held in the proxy script.</p>',
                     ],
                     [
                         'heading' => 'Fields',
                         'html' => '<table class="table table-sm table-bordered">
 <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
 <tbody>
-<tr><td>Delayed Bye (s)</td><td>Extra seconds always added after hangup.</td></tr>
+<tr><td>Delayed Bye (s)</td><td>Extra seconds always added to the buy-side formula.</td></tr>
 <tr><td>Delayed Bye MCD (s)</td><td>Minimum target duration. Extension includes <code>max(0, MCD − actual)</code>.</td></tr>
 <tr><td>Count Delayed duration in Buying</td><td>If checked, CDR carrier cost uses extended seconds. If unchecked, buy uses actual only.</td></tr>
 </tbody>
 </table>
-<p>Extension formula: <code>max(0, MCD − actual) + Delayed Bye</code><br>
-Connected toward vendor ≈ <code>max(actual, MCD) + Delayed Bye</code></p>',
+<p>Extension formula: <code>max(0, MCD − actual) + Delayed Bye</code></p>',
                     ],
                     [
                         'heading' => 'Examples (MCD = 25, Delayed Bye = 0)',
                         'html' => '<table class="table table-sm table-bordered">
-<thead><tr><th>Actual</th><th>Extension</th><th>Carrier sees ≈</th></tr></thead>
+<thead><tr><th>Actual</th><th>Extension</th><th>Buy duration ≈</th></tr></thead>
 <tbody>
 <tr><td>5 s</td><td>20 s</td><td>25 s</td></tr>
 <tr><td>10 s</td><td>15 s</td><td>25 s</td></tr>
@@ -163,16 +162,12 @@ Connected toward vendor ≈ <code>max(actual, MCD) + Delayed Bye</code></p>',
 </table>',
                     ],
                     [
-                        'heading' => 'Wiring / enable on the server',
-                        'html' => '<pre class="bg-light border rounded p-3 small mb-2">cd /opt/ownswitch-src
-git fetch origin main &amp;&amp; git reset --hard origin/main
-sudo bash deploy/refresh-ui.sh
-sudo -u ownswitch env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env \\
-  php /opt/ownswitch/current/bin/migrate.php
-sudo bash deploy/fix-delayed-bye.sh
-sudo bash deploy/fix-esl-auth.sh
+                        'heading' => 'Enable on the server',
+                        'html' => '<p>Migration <code>060_delayed_bye.sql</code> adds the trunk columns. After updating code:</p>
+<pre class="bg-light border rounded p-3 small mb-2">sudo bash /opt/ownswitch-src/deploy/refresh-ui.sh
+sudo ownswitch-migrate
 </pre>
-<p>Confirm <code>mod_lua</code> is loaded and <code>/usr/local/freeswitch/share/freeswitch/scripts/delayed_bye.lua</code> exists. Then set the three trunk fields and place a short test call.</p>',
+<p>Set the three trunk fields and place a short test call. Confirm sell uses actual and buy uses extended duration when the checkbox is on.</p>',
                     ],
                     [
                         'heading' => 'CDR &amp; profit',

@@ -468,7 +468,7 @@ final class SipUserController extends CrudController
             App::session()->flash(
                 'warning',
                 'Cannot read OpenSIPS registrations: '
-                . ($prov->initError() !== '' ? $prov->initError() : 'ESL host or password missing in ownswitch.env')
+                . ($prov->initError() !== '' ? $prov->initError() : 'OPENSIPS_DB_* / OPENSIPS_ENABLED missing in ownswitch.env')
             );
         }
         $regs = $prov->enabled() ? $prov->registeredContacts() : [];
@@ -505,7 +505,7 @@ final class SipUserController extends CrudController
             $state = '';
 
             if ($reg !== null) {
-                // expires is unix expiry from Sofia expsecs(); 0 means unknown → keep.
+                // expires is unix expiry from OpenSIPS usrloc; 0 means unknown → keep.
                 $exp = (int) ($reg['expires'] ?? 0);
                 if ($exp > 0 && $exp <= time()) {
                     $reg = null;
@@ -518,7 +518,7 @@ final class SipUserController extends CrudController
                 if ($state === '') {
                     $state = 'REGED';
                 }
-                // Ping-Status Unreachable (or flag) = offline even while Sofia still holds the AOR.
+                // Ping-Status Unreachable (or flag) = offline even while OpenSIPS still holds the AOR.
                 $reachable = !isset($reg['reachable']) || !empty($reg['reachable']);
                 if (!$reachable || $state === 'UNREACHABLE' || $state === 'UNREGISTERED') {
                     $online = false;

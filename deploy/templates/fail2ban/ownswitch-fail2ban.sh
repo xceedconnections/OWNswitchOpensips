@@ -289,7 +289,6 @@ sip_ignore_ips() {
   for ip in $(hostname -I 2>/dev/null); do
     ips="$ips $ip"
   done
-  ip="$(sed -n 's/.*name="socket" value="\([^"]*\)".*/\1/p' /usr/local/freeswitch/conf/sip_profiles/external.xml 2>/dev/null | head -1)"
   case "$ip" in
     ""|\$\$*|@@*) ;;
     *) ips="$ips $ip" ;;
@@ -331,7 +330,7 @@ write_sip_jail() {
   chmod 0640 "$SIP_AUTH_LOG" 2>/dev/null || true
   cat >"$dest" <<EOF
 # Managed by Ownswitch (portal Firewall / deploy)
-# FreeSWITCH auth warnings + ownswitch-sip syslog. OpenSIPS is not the SIP edge.
+# OpenSIPS / portal SIP auth warnings + ownswitch-sip syslog.
 [opensips-auth]
 enabled  = ${enabled}
 filter   = opensips-auth

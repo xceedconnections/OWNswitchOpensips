@@ -42,11 +42,11 @@ PKGS=(
   opensips-nathelper-module
 )
 apt_install "${PKGS[@]}"
-# Optional modules (continue if a package name differs between builds)
-apt_install_optional opensips-uac-module opensips-tls-module opensips-websocket-module \
-  opensips-http-module opensips-dialplan-module opensips-json-module \
-  opensips-restclient-module opensips-prometheus-module \
-  opensips-cachedb-redis-module opensips-module-cachedb-redis \
+# rtpengine / drouting / dialplan / websocket package names vary by OpenSIPS build
+apt_install_optional opensips-rtpengine-module opensips-db-modules opensips-dialplan-module \
+  opensips-uac-module opensips-tls-module opensips-websocket-module \
+  opensips-http-module opensips-json-module opensips-restclient-module \
+  opensips-prometheus-module opensips-cachedb-redis-module opensips-module-cachedb-redis \
   opensips-exec-module opensips-module-exec
 
 # ---------------------------------------------------------------------------
@@ -58,10 +58,16 @@ OPENSIPS_MPATH="$(dirname "$MOD_SO")/"
 export OPENSIPS_MPATH
 log_info "OPENSIPS_MPATH=${OPENSIPS_MPATH}"
 for so in db_mysql.so auth.so auth_db.so usrloc.so registrar.so dialog.so permissions.so \
-          drouting.so rtpengine.so acc.so mi_fifo.so proto_udp.so proto_tcp.so signaling.so \
+          drouting.so acc.so mi_fifo.so proto_udp.so proto_tcp.so signaling.so \
           sl.so tm.so rr.so maxfwd.so sipmsgops.so; do
   [[ -f "${OPENSIPS_MPATH}${so}" ]] || die "Missing required module: ${OPENSIPS_MPATH}${so}"
 done
+if [[ ! -f "${OPENSIPS_MPATH}rtpengine.so" ]]; then
+  die "Missing rtpengine.so — install opensips-rtpengine-module (required for media relay/record)"
+fi
+if [[ ! -f "${OPENSIPS_MPATH}cgrates.so" ]]; then
+  log_warn "cgrates.so missing — billing auth in opensips.cfg may fail until opensips-cgrates-module is installed"
+fi
 # Optional but preferred
 HAVE_MI_HTTP=0
 [[ -f "${OPENSIPS_MPATH}mi_http.so" || -f "${OPENSIPS_MPATH}httpd.so" ]] && HAVE_MI_HTTP=1

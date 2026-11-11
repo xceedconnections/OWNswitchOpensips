@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ownswitch\Tests\Security;
 
 use Ownswitch\Support\Sql;
-use PHPUnit\Framework\TestCase;
+use Ownswitch\Tests\TestCase;
 
 final class SqlHardeningTest extends TestCase
 {

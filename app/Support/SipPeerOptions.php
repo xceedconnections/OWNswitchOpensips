@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ownswitch\Support;
 
 /**
- * Shared SIP peer option lists for Trunks and SIP Users (OpenSIPS / Sofia).
+ * Shared SIP peer option lists for Trunks and SIP Users (OpenSIPS).
  */
 final class SipPeerOptions
 {

@@ -183,7 +183,7 @@ final class CarrierController extends CrudController
                 $row['latency_ms'] = '—';
                 continue;
             }
-            // REGISTER trunks: Sofia state + OPTIONS PingTime (ms).
+            // REGISTER trunks: drouting / OPTIONS PingTime (ms).
             if ($mode === 'register' && $fsOk) {
                 $st = $prov->gatewayStatus((int) ($row['id'] ?? 0));
                 $state = strtoupper((string) ($st['state'] ?? ''));
@@ -357,7 +357,7 @@ final class CarrierController extends CrudController
                     . ($st['label'] !== '' ? $st['label'] : 'pending')
                     . ' (REGED = registered to vendor).';
             }
-            return 'Trunk pushed to OpenSIPS (drouting gateway). Routes stay in the portal.';
+            return 'Trunk pushed to OpenSIPS drouting. Routes stay in the portal.';
         } catch (\Throwable $e) {
             error_log('[ownswitch] OpenSIPS trunk sync: ' . $e->getMessage());
             App::session()->flash('warning', 'Saved, but OpenSIPS sync failed: ' . mb_substr($e->getMessage(), 0, 280));

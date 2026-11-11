@@ -166,17 +166,17 @@ else add OK "secret leakage" "no DB password found under ${OWN_OPT}/current"; fi
   echo "COMPONENT VERSIONS"
   echo "------------------"
   echo "  MySQL     : ${mv_}"
-  echo "  OpenSIPS  : removed (FreeSWITCH is the SIP edge)"
+  echo "  OpenSIPS  : ${ov_}"
   echo "  CGRateS   : ${cv_}"
   echo "  PHP       : ${pv_}"
   echo "  nginx     : $(nginx -v 2>&1 | sed -n 's/.*nginx\///p' || echo n/a)"
   echo "  Redis     : $(redis-server --version 2>/dev/null | sed -n 's/.*v=\([0-9.]*\).*/\1/p' || echo n/a)"
   echo "  RTPengine : $(dpkg-query -W -f='${Version}' rtpengine-daemon 2>/dev/null || dpkg-query -W -f='${Version}' ngcp-rtpengine-daemon 2>/dev/null || echo n/a)"
-  echo "  FreeSWITCH: $(is_true "${FREESWITCH_ENABLED}" && cat /usr/local/freeswitch/.ownswitch-installed-version 2>/dev/null || echo disabled)"
   echo
   echo "DATABASES (separate by design)"
   echo "------------------------------"
   echo "  ownswitch (portal)  user: ownswitch      -> .env DB_*"
+  echo "  opensips (SIP)      user: opensips"
   echo "  cgrates (StorDB)    user: cgrates (+ cgrates_ro read-only for the portal)"
   echo "  Redis DataDB index  : ${REDIS_CGR_DB} (CGRateS), ${REDIS_PORTAL_DB} (portal cache)"
   echo
@@ -191,7 +191,7 @@ else add OK "secret leakage" "no DB password found under ${OWN_OPT}/current"; fi
   echo "  Application env file  : ${OWN_ETC}/ownswitch.env (root:ownswitch 0640)"
   echo "  Persisted settings    : ${OWN_ETC}/install.conf (non-secret)"
   echo "  CGRateS config        : /etc/cgrates/cgrates.json (root:cgrates 0640)"
-  echo "  FreeSWITCH config     : /usr/local/freeswitch/conf (SIP ${SIP_PORT}, ESL 127.0.0.1:8021)"
+  echo "  OpenSIPS config       : /etc/opensips/opensips.cfg (SIP ${SIP_PORT}, MI 127.0.0.1:8888)"
   echo "  Backup passphrase     : $(secret_path backup_passphrase)  <-- COPY OFFLINE"
   [[ -f /root/ownswitch-initial-admin.txt ]] && echo "  Initial admin password: /root/ownswitch-initial-admin.txt (delete after first login)"
   echo

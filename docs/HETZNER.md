@@ -23,7 +23,7 @@ Use **Ubuntu 24.04 LTS**, **x86_64 (Intel/AMD)** — not ARM (CAX).
   - TCP **80**, **443** (portal / ACME)
   - UDP+TCP **5060** (SIP — optionally restrict to known customer/carrier CIDRs)
   - UDP **30000–40000** (RTP / RTPengine)
-- Do **not** open 3306, 6379, 2012/2013 (CGRateS), 8021 (OpenSIPS MI).
+- Do **not** open 3306, 6379, 2012/2013/2014 (CGRateS), 8888 (OpenSIPS MI).
 
 **DNS:** create an **A record** `voip.yourdomain.com → server public IP` before or right after install.
 

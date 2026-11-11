@@ -24,7 +24,8 @@ final class TenantIsolationTest extends TestCase
             return;
         }
         $this->pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION, \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC]);
-        $this->pdo->exec('CREATE TABLE customers (id INTEGER PRIMARY KEY, reseller_id INTEGER NULL, name TEXT, code TEXT, contact_email TEXT, billing_mode TEXT,
+        $this->pdo->exec('CREATE TABLE customers (id INTEGER PRIMARY KEY, reseller_id INTEGER NULL, name TEXT, full_name TEXT, company_name TEXT, code TEXT,
+            contact_email TEXT, email_address TEXT, phone TEXT, teams_id TEXT, billing_mode TEXT,
             currency TEXT, timezone TEXT, status TEXT, credit_limit TEXT, max_concurrent_calls INT DEFAULT 10,
             rate_plan_id INT NULL, routing_plan_id INT NULL, media_policy TEXT NULL, recording_enabled INT DEFAULT 0, is_demo INT DEFAULT 0, created_at TEXT)');
         $this->pdo->exec('CREATE TABLE sip_accounts (id INTEGER PRIMARY KEY, reseller_id INTEGER NULL, customer_id INTEGER, username TEXT, domain TEXT, ha1 TEXT, ha1b TEXT,

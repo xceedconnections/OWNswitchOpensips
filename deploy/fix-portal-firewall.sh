@@ -21,7 +21,7 @@ filter   = opensips-auth
 port     = 5060
 protocol = udp,tcp
 backend  = auto
-logpath  = /usr/local/freeswitch/log/auth.log
+logpath  = /var/log/opensips/auth.log
            /var/log/auth.log
 maxretry = 5
 findtime = 10m

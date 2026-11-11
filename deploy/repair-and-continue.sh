@@ -12,7 +12,6 @@
 #   OWNSWITCH_DOMAIN=voip.example.com
 #   OWNSWITCH_ADMIN_EMAIL=ops@example.com
 #   OWN_SWITCH_ADMIN_PASS='...'
-#   FREESWITCH_ENABLED=0|1   (default 1)
 #   SKIP_GIT_PULL=1
 # =============================================================================
 set -Eeuo pipefail
@@ -32,7 +31,7 @@ export DEBIAN_FRONTEND=noninteractive
 export MYSQL_INSTALL_METHOD=direct
 export FORCE_MYSQL_DIRECT=1
 export NON_INTERACTIVE=1
-export FREESWITCH_ENABLED="${FREESWITCH_ENABLED:-1}"
+export FREESWITCH_ENABLED=0
 export APP_SRC="${APP_SRC:-$SRC}"
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@ final class CallerIp
         return str_starts_with($ip, '127.');
     }
 
-    /** True when Sofia only saw nginx on this host, so a dialer-supplied IP may replace it. */
+    /** True when OpenSIPS only saw nginx on this host, so a dialer-supplied IP may replace it. */
     public static function isLocalProxy(string $ip): bool
     {
         return trim($ip) === '' || self::isLoopback($ip);

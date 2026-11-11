@@ -102,17 +102,9 @@ Verified against official documentation and package indexes (Phase 1). Runtime i
 - DKMS/kernel headers must match running kernel.
 - Direct-media calls bypass RTPengine → no platform recording/audio fraud for those calls (by design).
 
-## OpenSIPS (optional)
+## Media notes
 
-### Confirmed
-
-- OpenSIPS **1.10.12** is the current 1.10 line.
-- ESL (Event Socket) on `127.0.0.1:8021` with generated password — never public.
-- Ubuntu 24.04: SignalWire package repos are **best-effort**; prefer **source build** or documented image builds for production.
-
-### Scope
-
-Enabled only when install flag `freeswitch_enabled=true`. Used for transcoding, announcements, optional recording/analysis paths — not required for basic billing/routing.
+Recording and DTMF strip/relay are handled by OpenSIPS + RTPengine (`media_policy` on the SIP user). There is no FreeSWITCH/ESL dependency in this build.
 
 ## PHP / web stack
 
@@ -134,8 +126,8 @@ Enabled only when install flag `freeswitch_enabled=true`. Used for transcoding, 
 | MySQL 3306 | localhost / private | **No** |
 | Redis 6379 | localhost | **No** |
 | CGRateS JSON-RPC | localhost | **No** |
-| OpenSIPS MI 8021 | localhost | **No** |
-| OpenSIPS MI/JSON | localhost | **No** |
+| OpenSIPS MI HTTP 8888 | localhost | **No** |
+| OpenSIPS MI FIFO | `/run/opensips/opensips_fifo` | **No** |
 
 ## Compatibility verdict
 

@@ -21,7 +21,7 @@ echo
 
 echo "========== Live service status =========="
 for u in mysql redis-server opensips cgrates php8.3-fpm nginx rtpengine rtpengine-daemon \
-         freeswitch ownswitch-scheduler.timer ownswitch-backup.timer ownswitch-worker; do
+         ownswitch-scheduler.timer ownswitch-backup.timer ownswitch-worker; do
   st="$(systemctl is-active "$u" 2>/dev/null || echo missing)"
   printf '  %-32s %s\n' "$u" "$st"
 done
@@ -43,44 +43,7 @@ fi
 export APP_SRC="$SRC"
 export MYSQL_INSTALL_METHOD=direct
 export NON_INTERACTIVE=1
-
-# Decide which stages to re-run based on live state
-STAGES=()
-if ! systemctl is-active --quiet mysql 2>/dev/null; then STAGES+=(30); fi
-if ! systemctl is-active --quiet redis-server 2>/dev/null; then STAGES+=(40); fi
-if ! systemctl is-active --quiet opensips 2>/dev/null; then STAGES+=(50); fi
-if ! systemctl is-active --quiet cgrates 2>/dev/null; then STAGES+=(60); fi
-if ! systemctl is-active --quiet rtpengine 2>/dev/null \
-   && ! systemctl is-active --quiet rtpengine-daemon 2>/dev/null \
-   && ! systemctl is-active --quiet ngcp-rtpengine-daemon 2>/dev/null; then
-  STAGES+=(70)
-fi
-# FreeSWITCH only if enabled in install.conf
-FS_EN="$(grep -E '^FREESWITCH_ENABLED=' /etc/ownswitch/install.conf 2>/dev/null | cut -d= -f2 || echo 0)"
-if [[ "${FS_EN}" == "1" ]] && ! systemctl is-active --quiet freeswitch 2>/dev/null; then
-  STAGES+=(75)
-fi
-if ! systemctl is-active --quiet nginx 2>/dev/null || ! systemctl is-active --quiet php8.3-fpm 2>/dev/null; then
-  STAGES+=(80)
-fi
-# Always redeploy app if placeholder or no index
-if [[ -f /opt/ownswitch/current/.ownswitch-placeholder ]] \
-   || [[ ! -f /opt/ownswitch/current/public/index.php ]] \
-   || [[ ! -f "$SRC/public/index.php" ]]; then
-  STAGES+=(90)
-fi
-# Always refresh workers/timers + health
-STAGES+=(95 99)
-
-# Dedupe while preserving order
-ONLY="$(printf '%s\n' "${STAGES[@]}" | awk '!s[$0]++' | paste -sd, -)"
-echo "========== Re-running stages: ${ONLY:-none} =========="
-
-if [[ -z "$ONLY" ]]; then
-  echo "Nothing obvious to fix; re-running health report only."
-  ONLY=99
-fi
+export FREESWITCH_ENABLED=0
 
 echo "Handing off to force-finish.sh (runs stages individually with full logs)…"
-export FREESWITCH_ENABLED="${FREESWITCH_ENABLED:-0}"
 bash "$SRC/deploy/force-finish.sh"

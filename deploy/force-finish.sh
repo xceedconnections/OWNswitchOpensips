@@ -7,9 +7,6 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/xceedconnections/OWNswitchOpensips/main/deploy/force-finish.sh \
 #     | sudo bash
-#
-# Env:
-#   FREESWITCH_ENABLED=0   skip FreeSWITCH (recommended until core stack is green)
 # =============================================================================
 set -Eeuo pipefail
 [[ "$(id -u)" -eq 0 ]] || { echo "Run as root"; exit 1; }
@@ -21,8 +18,7 @@ export MYSQL_INSTALL_METHOD=direct
 export FORCE_MYSQL_DIRECT=1
 export NON_INTERACTIVE=1
 export APP_SRC="${APP_SRC:-$SRC}"
-# Default: get portal/SIP/billing up first; FreeSWITCH is slow and optional for HTTP/SIP billing core.
-export FREESWITCH_ENABLED="${FREESWITCH_ENABLED:-0}"
+export FREESWITCH_ENABLED=0
 
 exec > >(tee -a "$LOG") 2>&1
 log() { printf '\n====[%s] %s====\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -30,7 +26,6 @@ die() { printf 'FATAL: %s\n' "$*" >&2; exit 1; }
 
 log "Force-finish starting. Log: ${LOG}"
 
-# --- sync code ---
 apt-get install -y -qq ca-certificates curl git gnupg rsync >/dev/null || true
 if [[ -d "${SRC}/.git" ]]; then
   git -C "${SRC}" fetch --depth 1 origin main
@@ -41,22 +36,26 @@ fi
 find "${SRC}/deploy" -type f -name '*.sh' -exec chmod +x {} +
 [[ -f "${SRC}/public/index.php" ]] || die "public/index.php missing in ${SRC} — cannot deploy portal"
 
-# Persist FS preference
 mkdir -p /etc/ownswitch
 grep -q '^FREESWITCH_ENABLED=' /etc/ownswitch/install.conf 2>/dev/null \
-  && sed -i "s/^FREESWITCH_ENABLED=.*/FREESWITCH_ENABLED=${FREESWITCH_ENABLED}/" /etc/ownswitch/install.conf \
-  || echo "FREESWITCH_ENABLED=${FREESWITCH_ENABLED}" >>/etc/ownswitch/install.conf
+  && sed -i 's/^FREESWITCH_ENABLED=.*/FREESWITCH_ENABLED=0/' /etc/ownswitch/install.conf \
+  || echo 'FREESWITCH_ENABLED=0' >>/etc/ownswitch/install.conf
 grep -q '^MYSQL_INSTALL_METHOD=' /etc/ownswitch/install.conf 2>/dev/null \
   && sed -i 's/^MYSQL_INSTALL_METHOD=.*/MYSQL_INSTALL_METHOD=direct/' /etc/ownswitch/install.conf \
   || echo 'MYSQL_INSTALL_METHOD=direct' >>/etc/ownswitch/install.conf
 
-# Preconditions
 systemctl is-active --quiet mysql || die "MySQL is not active — run repair-and-continue.sh first"
 systemctl is-active --quiet redis-server || {
   log "Starting redis…"
   bash "${SRC}/deploy/install.sh" --only 40 --yes --non-interactive
 }
 mysql --protocol=socket -uroot -e 'SELECT 1' >/dev/null
+
+# Free 5060 if leftover FreeSWITCH still owns it
+if ss -H -ulnp 'sport = :5060' 2>/dev/null | grep -q freeswitch; then
+  log "Stopping leftover FreeSWITCH so OpenSIPS can bind 5060"
+  systemctl disable --now freeswitch 2>/dev/null || true
+fi
 
 run_stage() {
   local n=$1
@@ -76,7 +75,6 @@ run_stage() {
         ls -la /usr/share/cgrates/storage/mysql 2>/dev/null || true
         ;;
     70) journalctl -u 'rtpengine*' -n 40 --no-pager || true ;;
-    75) journalctl -u freeswitch -n 40 --no-pager || true ;;
     80) journalctl -u nginx -n 40 --no-pager || true
         journalctl -u php8.3-fpm -n 40 --no-pager || true
         nginx -t 2>&1 || true
@@ -90,20 +88,12 @@ run_stage() {
 }
 
 FAILED=()
-# Core path: SIP + rating + media relay + web + app + workers
 for n in 50 60 70 80 90 95; do
   if ! run_stage "$n"; then
     FAILED+=("$n")
-    # Keep going so we surface every failure in one pass
   fi
 done
 
-# FreeSWITCH only when explicitly enabled
-if [[ "${FREESWITCH_ENABLED}" == "1" ]]; then
-  run_stage 75 || FAILED+=(75)
-fi
-
-# Force-start anything that is installed but inactive
 log "Force-starting installed services…"
 for u in opensips cgrates php8.3-fpm nginx; do
   if systemctl list-unit-files --no-legend "$u.service" 2>/dev/null | grep -q .; then
@@ -117,35 +107,11 @@ done
 systemctl enable --now ownswitch-scheduler.timer ownswitch-backup.timer >/dev/null 2>&1 || true
 systemctl enable --now ownswitch-worker >/dev/null 2>&1 || true
 
-# OpenSIPS schema hard check
-if command -v mysql >/dev/null; then
-  sub="$(mysql --protocol=socket -uroot -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='opensips' AND table_name='subscriber'" 2>/dev/null || echo 0)"
-  if [[ "$sub" != "1" ]]; then
-    log "OpenSIPS subscriber table missing — re-applying schemas via stage 50"
-    run_stage 50 || true
-  fi
-fi
+log "Health report…"
+bash "${SRC}/deploy/install.sh" --only 99 --yes --non-interactive || true
 
-# Final health
-run_stage 99 || true
-
-echo
-echo "========== RESULT =========="
-echo "Failed stages this pass: ${FAILED[*]:-none}"
-grep -E 'SUMMARY:|\[FAIL\]|\[WARN\]' /var/lib/ownswitch-install/reports/latest.txt 2>/dev/null || true
-echo
-echo "Services:"
-for u in mysql redis-server opensips cgrates php8.3-fpm nginx; do
-  printf '  %-20s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || echo missing)"
-done
-echo
-echo "Portal:"
-curl -ksI --max-time 10 "https://127.0.0.1/" -H "Host: ${OWNSWITCH_DOMAIN:-voip.xceedconnections.com}" | head -n8 || true
-echo
-echo "Full log: ${LOG}"
 if ((${#FAILED[@]})); then
-  echo "Some stages failed. Paste the FAIL lines above plus:  sudo tail -n 200 ${LOG}"
-  exit 1
+  die "Stages failed: ${FAILED[*]} — see ${LOG}"
 fi
-echo "Force-finish completed successfully."
+log "Force-finish complete"
 exit 0

@@ -20,7 +20,7 @@ Practical reference for the portal options — the same material is available in
 1. OpenSIPS authenticates the SIP user (directory OpenSIPS DB provisioning).
 2. Dialplan authorises balance, tariff, DNC, CLI, CAP.
 3. Trunk group builds a failover bridge to one or more trunks.
-4. On hangup, xml_cdr posts to the portal → rate sell + buy → ledger.
+4. On hangup, OpenSIPS accounting / CDR import → rate sell + buy → ledger.
 
 ## Trunk options (summary)
 

@@ -10,7 +10,7 @@ Install on a **clean Ubuntu 24.04 LTS** host with `deploy/install.sh`, then veri
 - [ ] OpenSIPS 3.6 + cgrates/mysql modules; `opensips -c` OK
 - [ ] CGRateS v0.10.4; DataDB Redis; StorDB `cgrates`
 - [ ] RTPengine (+ recording daemon when enabled)
-- [ ] OpenSIPS only if `FREESWITCH_ENABLED=1`; ESL on 127.0.0.1
+- [ ] OpenSIPS active on SIP 5060; MI on 127.0.0.1:8888 only
 - [ ] Nginx HTTPS + PHP 8.3-FPM
 - [ ] Secrets under `/etc/ownswitch/` (mode 0600); not in git
 - [ ] Health report green; management ports not public

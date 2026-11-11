@@ -269,7 +269,7 @@
         }
         setLink('connecting', 'Connecting');
         clientIp = usableIp(cred.client_ip);
-        // nginx terminates WSS → plain WS to FreeSWITCH ws-binding. Via must say WS
+        // nginx terminates WSS → plain WS to OpenSIPS proto_ws. Via must say WS
         // (not WSS) or Sofia drops replies: "invalid transport SIP/2.0/WSS".
         var socket = new JsSIP.WebSocketInterface(cred.ws_url);
         socket.via_transport = 'WS';

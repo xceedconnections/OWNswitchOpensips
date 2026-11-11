@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ownswitch\Tests\Support;
 
 use Ownswitch\Support\NumberSearch;
-use PHPUnit\Framework\TestCase;
+use Ownswitch\Tests\TestCase;
 
 final class NumberSearchTest extends TestCase
 {
@@ -29,7 +29,7 @@ final class NumberSearchTest extends TestCase
     {
         [$sql, $params] = NumberSearch::matchClause(['c.dst_normalized'], '1213800, 2138007447');
         $this->assertNotNull($sql);
-        $this->assertStringContainsString('OR', (string) $sql);
+        $this->assertStringContains('OR', (string) $sql);
         $this->assertContains('1213800%', $params);
         $this->assertTrue(
             (bool) array_filter($params, static fn ($p) => is_string($p) && str_contains($p, '2138007447')),

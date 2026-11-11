@@ -43,13 +43,11 @@ export RTPENGINE_SPOOL_DIR="/var/spool/rtpengine"
 export RECORDINGS_DIR="${OWN_VAR}/recordings"
 rt_user="root"; getent passwd rtpengine >/dev/null && rt_user="rtpengine"
 install -d -m 0750 -o "$rt_user" -g "$rt_user" "${RTPENGINE_SPOOL_DIR}"
-# Output readable by the portal group so it can stream/verify recordings
-# FreeSWITCH record_session writes the wav; the portal user reads it.
-# Parent stays unlistable; the execute bit lets freeswitch reach the folder by path.
+# RTPengine writes recordings; portal (ownswitch) must be able to read them.
 chmod 751 "$(dirname "${RECORDINGS_DIR}")" 2>/dev/null || true
-rec_owner="freeswitch"
-getent passwd freeswitch >/dev/null || rec_owner="$rt_user"
-install -d -m 2770 -o "$rec_owner" -g ownswitch "${RECORDINGS_DIR}"
+rec_owner="$rt_user"
+getent passwd ownswitch >/dev/null && rec_group="ownswitch" || rec_group="$rt_user"
+install -d -m 2770 -o "$rec_owner" -g "$rec_group" "${RECORDINGS_DIR}"
 
 # ---------------------------------------------------------------------------
 # 3. Configuration

@@ -1,6 +1,6 @@
 # Delayed Bye & MCD
 
-Trunk feature that delays SIP **BYE** toward the vendor after the real hangup, so the carrier’s connected time can meet a minimum (MCD). Customer (sell) billing always stays on real talk time.
+Trunk feature that can extend **carrier (buy) billable duration** after a short real call, so buy cost can meet a minimum connected time (MCD). Customer (sell) billing always stays on real talk time.
 
 ## Where to configure
 
@@ -8,8 +8,8 @@ Trunk feature that delays SIP **BYE** toward the vendor after the real hangup, s
 
 | Field | Default | Meaning |
 |---|---|---|
-| Delayed Bye (s) | `0` | Extra seconds to delay BYE after hangup |
-| Delayed Bye MCD (s) | `0` | Minimum duration used to calculate the hold |
+| Delayed Bye (s) | `0` | Extra seconds added to the buy-side duration formula |
+| Delayed Bye MCD (s) | `0` | Minimum duration used to calculate the extension |
 | Count Delayed duration in Buying | off | When on, CDR **buy/cost** uses the extended duration |
 
 Feature is **off** when both Delayed Bye and MCD are `0`.
@@ -34,54 +34,22 @@ carrier_connected ≈ actual + extension
 
 With Delayed Bye = 2 on an 8 s call and MCD 25: extension = 17 + 2 = 19 → carrier ≈ 27 s.
 
-## Billing behaviour
+## Billing behaviour (OpenSIPS build)
 
 | Side | Duration used |
 |---|---|
 | Customer sell / ledger | **Actual** talk time only |
 | Carrier buy / profit | Actual, **or** extended if “Count Delayed duration in Buying” is checked |
 
-If the vendor does **not** bill the delayed seconds, leave the checkbox **off**. Admin CDR / margin then still shows true buy vs sell on actual.
+The portal CDR ingest applies this when rating the buy side (`CdrIngestService` + trunk columns from migration `060_delayed_bye.sql`).
 
-## OpenSIPS wiring
+## Signalling note
 
-1. Trunk dialstring sets B-leg channel vars when Delayed Bye or MCD &gt; 0:
-   - `os_delayed_bye`, `os_delayed_bye_mcd`, `os_delayed_bye_count_buying`
-   - `session_in_hangup_hook=true`
-   - `api_hangup_hook=lua delayed_bye.lua`
-2. Script: `/usr/local/freeswitch/share/freeswitch/scripts/delayed_bye.lua`
-3. On hangup (when we are clearing toward the vendor), Lua sleeps for `extension` seconds so BYE is delayed. If the callee already sent BYE (`recv_bye`), no delay.
-
-### Enable on a production host
-
-```bash
-cd /opt/ownswitch-src
-git fetch origin main && git reset --hard origin/main
-sudo bash deploy/refresh-ui.sh
-
-sudo -u ownswitch env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env \
-  php /opt/ownswitch/current/bin/migrate.php
-
-sudo bash deploy/fix-delayed-bye.sh
-sudo bash deploy/fix-esl-auth.sh   # loads mod_lua via OpenSIPS / RTPengine restart / ESL
-
-PASS=$(tr -d '\r\n' </etc/ownswitch/secrets/freeswitch_esl_password)
-/usr/local/freeswitch/bin/fs_cli -H 127.0.0.1 -P 8021 -p "$PASS" -x 'module_exists mod_lua'
-```
-
-Migration `060_delayed_bye.sql` adds the three columns on `carrier_trunks`.
+This OpenSIPS build does **not** hold the SIP BYE toward the vendor in the proxy script. Delayed Bye / MCD here is a **billing** control so your buy cost can match vendor MCD policies. If you need the vendor’s SIP CDR to literally show a longer connected time, that requires a media-server hangup hook (out of scope for OpenSIPS-only).
 
 ## Verification checklist
 
 1. Trunk: MCD `25`, Delayed Bye `0`, Buying checkbox **on**.
 2. Place an ~8 s answered call through that trunk.
-3. Confirm vendor/side SIP shows hangup ~25 s after answer (BYE delayed ~17 s).
-4. Portal CDR: actual ≈ 8; customer charge on ~8 s; carrier billable/cost on ~25 s (after carrier I/S).
-5. Turn Buying checkbox **off**, place another short call: buy should follow actual again.
-
-## Limitations
-
-- Applies per trunk that answered; failover legs that never answer are unaffected.
-- Does not change customer prepaid reservation math (still based on real usage at settlement).
-- Requires `mod_lua` and the installed `delayed_bye.lua` script.
-- Callee-initiated BYE is not delayed (nothing left to hold toward the vendor).
+3. Portal CDR: actual ≈ 8; customer charge on ~8 s; carrier billable/cost on ~25 s (after carrier I/S).
+4. Turn Buying checkbox **off**, place another short call: buy should follow actual again.

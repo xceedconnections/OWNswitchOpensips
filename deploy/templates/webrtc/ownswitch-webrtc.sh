@@ -1,167 +1,95 @@
 #!/usr/bin/env bash
-# Portal Settings → WebRTC. Local SIP-over-WebSocket for the browser dialer.
-#   ownswitch-webrtc status
-#   ownswitch-webrtc enable
+# Ownswitch WebRTC helper — OpenSIPS proto_ws on 127.0.0.1:5066 + nginx /sip-ws.
+# Installed as /usr/local/sbin/ownswitch-webrtc (root via sudoers).
 set -euo pipefail
-[[ "$(id -u)" -eq 0 ]] || { echo "message=Run as root"; exit 1; }
 
-FS_CONF="${FREESWITCH_CONF:-/usr/local/freeswitch/conf}"
-EXT="${FS_CONF}/sip_profiles/external.xml"
-NGINX="/etc/nginx/sites-available/ownswitch.conf"
-ENVF="/etc/ownswitch/ownswitch.env"
-MARK="ownswitch-sip-ws"
-WS_LINE='    <param name="ws-binding" value="127.0.0.1:5066"/>'
+CMD="${1:-status}"
+CFG="${OPENSIPS_CFG:-/etc/opensips/opensips.cfg}"
+NGINX_SITE=/etc/nginx/sites-available/ownswitch.conf
 
-ws_present() { [[ -f "$EXT" ]] && grep -q 'ws-binding' "$EXT"; }
-nginx_present() {
-  [[ -f "$NGINX" ]] || return 1
-  # Must live in the HTTPS server, not the :80 redirect server.
-  awk '
-    /listen[[:space:]]+443/ { https=1 }
-    /listen[[:space:]]+80;/ { https=0 }
-    /listen[[:space:]]+\[::\]:80/ { https=0 }
-    /listen[[:space:]]+127\.0\.0\.1:/ { https=0 }
-    https && /ownswitch-sip-ws|location \/sip-ws/ { found=1 }
-    END { exit(found ? 0 : 1) }
-  ' "$NGINX" && grep -q 'Sec-WebSocket-Protocol' "$NGINX"
+have_ws_so() {
+  find /usr/lib /usr/lib64 -type f \( -name proto_ws.so -o -name proto_wss.so \) -path '*opensips/modules*' 2>/dev/null | head -n1 | grep -q .
 }
 
-fs_cli() {
-  local pass=""
-  [[ -f "$ENVF" ]] && pass="$(grep -E '^FREESWITCH_ESL_PASSWORD=' "$ENVF" | head -1 | cut -d= -f2- || true)"
-  if [[ -n "$pass" && -x /usr/local/freeswitch/bin/fs_cli ]]; then
-    /usr/local/freeswitch/bin/fs_cli -p "$pass" -x "$1" || true
-  elif [[ -x /usr/local/freeswitch/bin/fs_cli ]]; then
-    /usr/local/freeswitch/bin/fs_cli -x "$1" || true
+ws_listening() {
+  ss -H -ltn 'sport = :5066' 2>/dev/null | grep -q 127.0.0.1 || \
+  ss -H -ltn 'sport = :5066' 2>/dev/null | grep -q .
+}
+
+cfg_has_ws() {
+  [[ -f "$CFG" ]] && grep -qE 'loadmodule\s+"proto_ws\.so"|socket=ws:' "$CFG"
+}
+
+status() {
+  local enabled=0 listening=0
+  cfg_has_ws && enabled=1
+  ws_listening && listening=1
+  echo "enabled=${enabled}"
+  echo "listening=${listening}"
+  if (( enabled && listening )); then
+    echo "message=OpenSIPS WebSocket SIP is enabled on 127.0.0.1:5066 (nginx /sip-ws)."
+    return 0
   fi
+  if ! have_ws_so; then
+    echo "message=opensips-websocket-module is not installed. Run: apt-get install -y opensips-websocket-module"
+    return 1
+  fi
+  echo "message=WebSocket SIP is not active yet. Use Enable in the portal or: sudo ownswitch-webrtc enable"
+  return 1
 }
 
-listening() {
-  ss -ltn 2>/dev/null | grep -qE '127\.0\.0\.1:5066|:5066' || ss -ltnH 2>/dev/null | grep -q ':5066'
-}
-
-emit_status() {
-  echo "ok=1"
-  if ws_present && nginx_present; then
-    echo "enabled=1"
-  else
+enable() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y opensips-websocket-module 2>/dev/null || true
+  if ! have_ws_so; then
     echo "enabled=0"
-  fi
-  if listening; then
-    echo "listening=1"
-  else
     echo "listening=0"
-  fi
-}
-
-ensure_ws_binding() {
-  [[ -f "$EXT" ]] || { echo "message=FreeSWITCH external profile is missing"; return 1; }
-  cp -a "$EXT" "${EXT}.bak.ws.$(date +%s)"
-  if grep -q 'ws-binding' "$EXT"; then
-    sed -i -E 's#<param name="ws-binding"[^/]*/>#'"$WS_LINE"'#' "$EXT"
-  elif grep -q 'name="sip-port"' "$EXT"; then
-    sed -i '/name="sip-port"/a\'"$WS_LINE" "$EXT"
-  else
-    sed -i '/<settings>/a\'"$WS_LINE" "$EXT"
-  fi
-  grep -q 'ws-binding' "$EXT" || { echo "message=Could not write ws-binding into external.xml"; return 1; }
-}
-
-write_nginx_block() {
-  cat <<'EOF'
-    # ownswitch-sip-ws — browser dialer (HTTPS only)
-    location /sip-ws {
-        proxy_pass http://127.0.0.1:5066;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Sec-WebSocket-Protocol $http_sec_websocket_protocol;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_buffering off;
-    }
-
-EOF
-}
-
-ensure_nginx() {
-  [[ -f "$NGINX" ]] || { echo "message=Nginx site is missing"; return 1; }
-  if grep -q 'microphone=()' "$NGINX"; then
-    sed -i 's/microphone=()/microphone=(self)/' "$NGINX"
-  fi
-  cp -a "$NGINX" "${NGINX}.bak.ws.$(date +%s)"
-
-  # Strip every previous sip-ws location from any server block.
-  awk '
-    /ownswitch-sip-ws|location = \/sip-ws|location \/sip-ws/ { skip=1 }
-    skip && /}/ { skip=0; next }
-    skip { next }
-    { print }
-  ' "$NGINX" >"${NGINX}.tmp"
-  mv "${NGINX}.tmp" "$NGINX"
-
-  local snippet
-  snippet="$(mktemp)"
-  write_nginx_block >"$snippet"
-
-  # Insert into the HTTPS (443) server only, just before its main location /.
-  SNIP="$snippet" awk '
-    /listen[[:space:]]+443/ { https=1 }
-    /listen[[:space:]]+80;/ { https=0 }
-    /listen[[:space:]]+\[::\]:80/ { https=0 }
-    /listen[[:space:]]+127\.0\.0\.1:/ { https=0 }
-    !done && https && index($0, "location / {") {
-      while ((getline line < ENVIRON["SNIP"]) > 0) print line
-      done = 1
-    }
-    { print }
-  ' "$NGINX" >"${NGINX}.new"
-  rm -f "$snippet"
-  mv "${NGINX}.new" "$NGINX"
-
-  if ! nginx_present; then
-    echo "message=Could not place /sip-ws into the HTTPS nginx server"
+    echo "message=Could not install opensips-websocket-module (proto_ws.so missing)."
     return 1
   fi
-  if ! nginx -t; then
-    echo "message=nginx -t failed, previous site config restored"
-    local bak
-    bak="$(ls -1t "${NGINX}.bak.ws."* 2>/dev/null | head -1 || true)"
-    [[ -n "$bak" ]] && cp -a "$bak" "$NGINX"
-    return 1
-  fi
-  systemctl reload nginx
-}
+  [[ -f "$CFG" ]] || { echo "message=Missing ${CFG}"; return 1; }
 
-cmd="${1:-status}"
-case "$cmd" in
-  status)
-    emit_status
-    ;;
-  enable)
-    ensure_ws_binding
-    ensure_nginx
-    fs_cli "sofia profile external restart" >/dev/null
-    sleep 2
-    if ! listening; then
-      fs_cli "sofia profile external start" >/dev/null
-      sleep 2
-    fi
-    if listening; then
-      echo "message=WebRTC is enabled. Softphone connects at wss://this-host/sip-ws."
+  local mpath
+  mpath="$(dirname "$(find /usr/lib /usr/lib64 -type f -name tm.so -path '*opensips/modules*' 2>/dev/null | head -n1)")/"
+  [[ -d "$mpath" ]] || { echo "message=OpenSIPS modules path not found"; return 1; }
+
+  if ! grep -q 'loadmodule "proto_ws.so"' "$CFG"; then
+    cp -a "$CFG" "/var/backups/ownswitch-config/opensips.cfg.webrtc.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
+    # Insert after proto_tcp if present, else after mpath
+    if grep -q 'loadmodule "proto_tcp.so"' "$CFG"; then
+      sed -i '/loadmodule "proto_tcp.so"/a loadmodule "proto_ws.so"' "$CFG"
     else
-      echo "message=Nginx is ready, but FreeSWITCH is not listening on 5066 yet. Check sofia status / ws-binding support."
-      emit_status
-      exit 1
+      sed -i "/^mpath=/a loadmodule \"proto_ws.so\"" "$CFG"
     fi
-    emit_status
-    ;;
-  *)
-    echo "message=Unknown command"
-    exit 1
-    ;;
+  fi
+  if ! grep -qE 'socket=ws:127\.0\.0\.1:5066' "$CFG"; then
+    sed -i '/^socket=tcp:/a socket=ws:127.0.0.1:5066' "$CFG" || \
+      printf '\nsocket=ws:127.0.0.1:5066\n' >>"$CFG"
+  fi
+
+  if ! opensips -c -f "$CFG" >/tmp/opensips-ws-check.out 2>&1; then
+    echo "enabled=0"
+    echo "listening=0"
+    echo "message=opensips -c failed after WebSocket edit — see /tmp/opensips-ws-check.out"
+    return 1
+  fi
+
+  systemctl restart opensips
+  sleep 1
+  if ws_listening; then
+    echo "enabled=1"
+    echo "listening=1"
+    echo "message=OpenSIPS WebSocket SIP listening on 127.0.0.1:5066. Dialer uses wss://host/sip-ws"
+    return 0
+  fi
+  echo "enabled=1"
+  echo "listening=0"
+  echo "message=Config updated but :5066 is not listening yet. Check: journalctl -u opensips -n 40"
+  return 1
+}
+
+case "$CMD" in
+  status) status; exit $? ;;
+  enable) enable; exit $? ;;
+  *) echo "message=Usage: $0 status|enable"; exit 2 ;;
 esac

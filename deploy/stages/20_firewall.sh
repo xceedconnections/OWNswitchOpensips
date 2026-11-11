@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage 20 - ufw firewall (default deny) + optional fail2ban for SSH.
-# Internal services (MySQL, Redis, CGRateS, FreeSWITCH ESL, OpenSIPS MI, RTPengine NG)
+# Internal services (MySQL, Redis, CGRateS, OpenSIPS MI, RTPengine NG)
 # are bound to 127.0.0.1 AND explicitly denied here (defence in depth).
 set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
@@ -30,8 +30,8 @@ ufw logging low            >/dev/null
 declare -A INTERNAL_PORTS=(
   [3306]="mysql" [33060]="mysqlx" [6379]="redis"
   [2012]="cgrates-jsonrpc" [2013]="cgrates-gob" [2014]="cgrates-bijson" [2080]="cgrates-http"
-  [8021]="freeswitch-esl" [8888]="opensips-mi-http" [8081]="ownswitch-internal"
-  ["${RTPENGINE_NG_PORT}"]="rtpengine-ng" [5090]="freeswitch-sip-int" [5091]="freeswitch-sip-ext"
+  [8888]="opensips-mi-http" [8081]="ownswitch-internal"
+  ["${RTPENGINE_NG_PORT}"]="rtpengine-ng"
 )
 for port in "${!INTERNAL_PORTS[@]}"; do
   ufw_rule deny in to any port "$port" comment "internal-only:${INTERNAL_PORTS[$port]}"
@@ -129,7 +129,7 @@ filter   = opensips-auth
 port     = ${SIP_PORT}
 protocol = udp,tcp
 backend  = auto
-logpath  = /usr/local/freeswitch/log/auth.log
+logpath  = /var/log/opensips/auth.log
            /var/log/auth.log
 maxretry = 5
 findtime = 10m
