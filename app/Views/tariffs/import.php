@@ -5,9 +5,12 @@
 ?>
 <div class="os-page-head">
     <div>
-        <h1 class="os-page-title">Tariff import / export</h1>
-        <p class="os-page-sub">CSV or Excel · map columns · validate · commit</p>
+        <h1 class="os-page-title"><?= $kind === 'carrier' ? 'Provider rates import / export' : 'Tariff import / export' ?></h1>
+        <p class="os-page-sub">CSV or Excel · map every field · validate · commit<?= $kind === 'carrier' ? ' · then use Batch update on Provider Rates' : '' ?></p>
     </div>
+    <?php if ($kind === 'carrier'): ?>
+        <a class="btn btn-outline-secondary btn-sm" href="<?= e(url('/provider-rates')) ?>">Back to Provider Rates</a>
+    <?php endif; ?>
 </div>
 <?php if (!empty($flash)): ?><div class="alert alert-info"><?= e($flash) ?></div><?php endif; ?>
 

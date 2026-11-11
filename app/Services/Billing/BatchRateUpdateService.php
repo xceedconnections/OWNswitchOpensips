@@ -40,7 +40,10 @@ final class BatchRateUpdateService
      *   routing_plan_id?:?string,
      *   plan_prefix_id?:?string,
      *   initial_increment?:?string,
-     *   subsequent_increment?:?string
+     *   subsequent_increment?:?string,
+     *   destination?:?string,
+     *   status?:?string,
+     *   connect_fee?:?string
      * } $changes
      * @return array{updated:int}
      */
@@ -69,6 +72,22 @@ final class BatchRateUpdateService
 
         $initial = $this->block($changes['initial_increment'] ?? null, 'Initial block');
         $subsequent = $this->block($changes['subsequent_increment'] ?? null, 'Billing block');
+        $destination = trim((string) ($changes['destination'] ?? ''));
+        $destination = $destination !== '' ? mb_substr($destination, 0, 120) : null;
+        $status = trim((string) ($changes['status'] ?? ''));
+        if ($status !== '' && !in_array($status, ['active', 'disabled'], true)) {
+            throw new \InvalidArgumentException('Status must be active or disabled');
+        }
+        $status = $status !== '' ? $status : null;
+        $connectFee = trim((string) ($changes['connect_fee'] ?? ''));
+        if ($connectFee !== '') {
+            if (!preg_match('/^\d+(\.\d{1,8})?$/', $connectFee)) {
+                throw new \InvalidArgumentException('Connect fee must be a non-negative decimal');
+            }
+            $connectFee = RatingService::round($connectFee, 8);
+        } else {
+            $connectFee = null;
+        }
 
         $setTrunk = false;
         $trunkId = null;
@@ -106,8 +125,11 @@ final class BatchRateUpdateService
             }
         }
 
-        if (!$changeRate && $initial === null && $subsequent === null && !$setTrunk && !$setPrefix) {
-            throw new \InvalidArgumentException('Choose a trunk group, plan prefix, price, initial block, or billing block to update.');
+        if (
+            !$changeRate && $initial === null && $subsequent === null && !$setTrunk && !$setPrefix
+            && $destination === null && $status === null && $connectFee === null
+        ) {
+            throw new \InvalidArgumentException('Choose at least one field to update (price, blocks, destination, status, connect fee, etc.).');
         }
 
         $prefixFilter = trim((string) ($changes['prefix_filter'] ?? ''));
@@ -115,7 +137,7 @@ final class BatchRateUpdateService
 
         [$tw, $tp] = $scope->where('none');
         $ph = implode(',', array_fill(0, count($ids), '?'));
-        $cols = 'id, rate, prefix, initial_increment, subsequent_increment';
+        $cols = 'id, rate, prefix, destination, initial_increment, subsequent_increment, connect_fee, status';
         if ($kind !== 'carrier') {
             $cols .= ', routing_plan_id';
             if ($setPrefix) {
@@ -159,6 +181,18 @@ final class BatchRateUpdateService
             if ($subsequent !== null && (int) ($row['subsequent_increment'] ?? 0) !== $subsequent) {
                 $set[] = 'subsequent_increment = ?';
                 $params[] = $subsequent;
+            }
+            if ($destination !== null && (string) ($row['destination'] ?? '') !== $destination) {
+                $set[] = 'destination = ?';
+                $params[] = $destination;
+            }
+            if ($status !== null && (string) ($row['status'] ?? '') !== $status) {
+                $set[] = 'status = ?';
+                $params[] = $status;
+            }
+            if ($connectFee !== null && bccomp(RatingService::round((string) ($row['connect_fee'] ?? '0'), 8), $connectFee, 8) !== 0) {
+                $set[] = 'connect_fee = ?';
+                $params[] = $connectFee;
             }
             if ($setTrunk) {
                 $current = $row['routing_plan_id'] ?? null;

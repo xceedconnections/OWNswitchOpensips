@@ -287,13 +287,37 @@ final class RoutingController extends CrudController
         return null;
     }
 
+    protected function beforeDelete(Request $r, array $row): ?string
+    {
+        if ($this->kind !== 'plans') {
+            return null;
+        }
+        $id = (int) $row['id'];
+        $pdo = $this->db();
+        try {
+            // Clear assignments that RESTRICT delete, then remove member rules.
+            try {
+                $pdo->prepare('UPDATE customers SET routing_plan_id = NULL WHERE routing_plan_id = ?')->execute([$id]);
+            } catch (\PDOException) {
+            }
+            try {
+                $pdo->prepare('UPDATE sip_accounts SET routing_plan_id = NULL WHERE routing_plan_id = ?')->execute([$id]);
+            } catch (\PDOException) {
+            }
+            try {
+                $pdo->prepare('UPDATE rate_plan_tariffs SET routing_plan_id = NULL WHERE routing_plan_id = ?')->execute([$id]);
+            } catch (\PDOException) {
+            }
+            $pdo->prepare('DELETE FROM routing_rules WHERE routing_plan_id = ?')->execute([$id]);
+        } catch (\Throwable $e) {
+            return 'Cannot delete Trunk group: ' . mb_substr($e->getMessage(), 0, 200);
+        }
+        return null;
+    }
+
     protected function afterDelete(Request $r, array $row): void
     {
-        if ($this->kind === 'plans') {
-            $this->db()->prepare('DELETE FROM routing_rules WHERE routing_plan_id = ?')->execute([(int) $row['id']]);
-            $this->pushRoutes();
-        }
-        if ($this->kind === 'rules') {
+        if ($this->kind === 'plans' || $this->kind === 'rules') {
             $this->pushRoutes();
         }
     }

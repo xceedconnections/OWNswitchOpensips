@@ -227,8 +227,18 @@ final class TariffController extends CrudController
         $extra = [
             'bulkDelete' => true,
             'bulkRateUpdate' => true,
+            'batchAllowDestination' => true,
             'ownerFilter' => ['name' => $ownerKey, 'label' => $ownerLabel, 'options' => $opts],
             'batchPriceLabel' => $this->kind === 'carrier' ? 'Buy price' : 'Sell price',
+            'headerLinks' => $this->kind === 'carrier'
+                ? [
+                    ['href' => '/provider-rates/import', 'label' => 'Import CSV/Excel', 'icon' => 'upload', 'class' => 'btn-outline-secondary'],
+                    ['href' => '/tariffs/export?kind=carrier', 'label' => 'Export CSV', 'icon' => 'download', 'class' => 'btn-outline-secondary'],
+                ]
+                : [
+                    ['href' => '/tariffs/import', 'label' => 'Import CSV/Excel', 'icon' => 'upload', 'class' => 'btn-outline-secondary'],
+                    ['href' => '/tariffs/export?kind=customer', 'label' => 'Export CSV', 'icon' => 'download', 'class' => 'btn-outline-secondary'],
+                ],
         ];
         if ($this->kind === 'customer') {
             $groups = ['' => 'Leave unchanged', '0' => 'Use user’s trunk group'];
@@ -280,6 +290,9 @@ final class TariffController extends CrudController
         $prefixMode = (string) $r->input('prefix_mode', 'starts');
         $initial = trim((string) $r->input('initial_increment', ''));
         $subsequent = trim((string) $r->input('subsequent_increment', ''));
+        $destination = trim((string) $r->input('destination', ''));
+        $status = trim((string) $r->input('status', ''));
+        $connectFee = trim((string) $r->input('connect_fee', ''));
         $trunkRaw = $r->input('routing_plan_id', null);
         $trunk = is_string($trunkRaw) ? $trunkRaw : null;
         $planPrefixRaw = $r->input('plan_prefix_id', null);
@@ -317,9 +330,11 @@ final class TariffController extends CrudController
                     'plan_prefix_id' => $planPrefix,
                     'initial_increment' => $initial !== '' ? $initial : null,
                     'subsequent_increment' => $subsequent !== '' ? $subsequent : null,
+                    'destination' => $destination !== '' ? $destination : null,
+                    'status' => $status !== '' ? $status : null,
+                    'connect_fee' => $connectFee !== '' ? $connectFee : null,
                 ],
-            );
-        } catch (\InvalidArgumentException $e) {
+            );        } catch (\InvalidArgumentException $e) {
             return $this->redirect($r, $this->base, $e->getMessage(), 'danger');
         }
 

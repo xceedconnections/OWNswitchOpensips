@@ -9,6 +9,7 @@ use Ownswitch\Http\Request;
 use Ownswitch\Integrations\OpenSIPS\OpensipsProvisioner;
 use Ownswitch\Repositories\BaseRepository;
 use Ownswitch\Repositories\CarrierRepository;
+use Ownswitch\Services\Billing\CarrierBalanceService;
 use Ownswitch\Services\Routing\OpensipsRoutingSync;
 use Ownswitch\Services\Sip\SipOptionsProbe;
 use Ownswitch\Services\Dnc\DncService;
@@ -60,6 +61,7 @@ final class CarrierController extends CrudController
         if ($this->kind !== 'trunk') {
             return [
                 ['name' => 'name', 'label' => 'Name', 'required' => true, 'max' => 120, 'list' => true, 'help' => 'Friendly provider name shown in trunks, CDRs, and reports.'],
+                ['name' => 'balance', 'label' => 'Balance', 'list' => true, 'list_only' => true, 'help' => 'Provider account balance (refills − buy charges). Empty balance does not stop trunks.'],
                 ['name' => 'notes', 'label' => 'Description', 'type' => 'textarea', 'max' => 2000, 'help' => 'Optional internal notes about this provider (contracts, NOC contacts, etc.).'],
                 $status,
             ];
@@ -164,7 +166,19 @@ final class CarrierController extends CrudController
 
     protected function enrichRows(Request $r, array $rows): array
     {
-        if ($this->kind !== 'trunk' || $rows === []) {
+        if ($rows === []) {
+            return $rows;
+        }
+        if ($this->kind === 'carrier') {
+            $ids = array_map(static fn ($row) => (int) $row['id'], $rows);
+            $balances = (new CarrierBalanceService($this->db()))->balancesFor($ids);
+            foreach ($rows as &$row) {
+                $row['balance'] = $balances[(int) $row['id']] ?? '0.000000';
+            }
+            unset($row);
+            return $rows;
+        }
+        if ($this->kind !== 'trunk') {
             return $rows;
         }
         $prov = OpensipsProvisioner::fromConfig();
@@ -344,9 +358,68 @@ final class CarrierController extends CrudController
         return $data;
     }
 
+    protected function beforeDelete(Request $r, array $row): ?string
+    {
+        $pdo = $this->db();
+        $id = (int) $row['id'];
+        try {
+            if ($this->kind === 'trunk') {
+                // Remove trunk from all trunk groups / routes first (RESTRICT FK).
+                $pdo->prepare('DELETE FROM routing_rules WHERE carrier_trunk_id = ?')->execute([$id]);
+                return null;
+            }
+            // Provider: detach DID providers, delete rates, remove trunks (+ their route members).
+            try {
+                $pdo->prepare('UPDATE did_providers SET carrier_id = NULL WHERE carrier_id = ?')->execute([$id]);
+            } catch (\PDOException) {
+            }
+            try {
+                $pdo->prepare('DELETE FROM carrier_tariffs WHERE carrier_id = ?')->execute([$id]);
+            } catch (\PDOException) {
+            }
+            $trunkIds = [];
+            try {
+                $st = $pdo->prepare('SELECT id FROM carrier_trunks WHERE carrier_id = ?');
+                $st->execute([$id]);
+                $trunkIds = array_map('intval', $st->fetchAll(\PDO::FETCH_COLUMN) ?: []);
+            } catch (\PDOException) {
+            }
+            if ($trunkIds !== []) {
+                $ph = implode(',', array_fill(0, count($trunkIds), '?'));
+                try {
+                    $pdo->prepare("DELETE FROM routing_rules WHERE carrier_trunk_id IN ({$ph})")->execute($trunkIds);
+                } catch (\PDOException) {
+                }
+                try {
+                    $pdo->prepare("DELETE FROM carrier_trunks WHERE carrier_id = ?")->execute([$id]);
+                } catch (\PDOException $e) {
+                    return 'Cannot delete Provider: could not remove trunks (' . mb_substr($e->getMessage(), 0, 120) . ').';
+                }
+                // Best-effort OpenSIPS cleanup for deleted trunks
+                try {
+                    $prov = OpensipsProvisioner::fromConfig();
+                    if ($prov->enabled()) {
+                        foreach ($trunkIds as $tid) {
+                            $prov->removeTrunk($tid);
+                        }
+                        (new OpensipsRoutingSync($pdo, $prov))->syncAll();
+                    }
+                } catch (\Throwable) {
+                }
+            }
+            // carrier_balances / carrier_ledger cascade via FK when present
+        } catch (\Throwable $e) {
+            return 'Cannot delete ' . $this->singular . ': ' . mb_substr($e->getMessage(), 0, 200);
+        }
+        return null;
+    }
+
     protected function afterSave(Request $r, int $id, array $data, ?array $existing): ?string
     {
         if ($this->kind !== 'trunk') {
+            if ($existing === null) {
+                (new CarrierBalanceService($this->db()))->ensureBalanceRow($id);
+            }
             return null;
         }
         $prov = OpensipsProvisioner::fromConfig();

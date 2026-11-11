@@ -55,4 +55,26 @@ final class RatePlanController extends CrudController
         (new RatePlanRepository($this->db()))->createVersion($id, (int) ($this->user($r)['id'] ?? 0) ?: null);
         return null;
     }
+
+    protected function beforeDelete(Request $r, array $row): ?string
+    {
+        $id = (int) $row['id'];
+        $pdo = $this->db();
+        try {
+            // Unassign from users first (RESTRICT FK).
+            try {
+                $pdo->prepare('UPDATE customers SET rate_plan_id = NULL WHERE rate_plan_id = ?')->execute([$id]);
+            } catch (\PDOException) {
+            }
+            foreach (['rate_plan_tariffs', 'plan_prefixes', 'rate_plan_versions'] as $table) {
+                try {
+                    $pdo->prepare("DELETE FROM `{$table}` WHERE rate_plan_id = ?")->execute([$id]);
+                } catch (\PDOException) {
+                }
+            }
+        } catch (\Throwable $e) {
+            return 'Cannot delete Plan: ' . mb_substr($e->getMessage(), 0, 200);
+        }
+        return null;
+    }
 }

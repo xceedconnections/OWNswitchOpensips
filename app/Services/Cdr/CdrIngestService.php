@@ -6,6 +6,7 @@ namespace Ownswitch\Services\Cdr;
 
 use Ownswitch\Repositories\CdrRepository;
 use Ownswitch\Repositories\IpEndpointRepository;
+use Ownswitch\Services\Billing\CarrierBalanceService;
 use Ownswitch\Services\Billing\LedgerService;
 use Ownswitch\Services\Billing\PrepaidService;
 use Ownswitch\Services\Billing\RateResolver;
@@ -152,6 +153,23 @@ final class CdrIngestService
             }
             return $id;
         });
+
+        // Provider wallet: deduct buy cost from provider balance (never blocks the call / trunk).
+        if (
+            ($row['settlement_status'] ?? '') === 'settled'
+            && !empty($row['carrier_id'])
+            && isset($row['carrier_cost'])
+            && bccomp((string) $row['carrier_cost'], '0', 6) > 0
+        ) {
+            (new CarrierBalanceService($this->pdo))->chargeCall(
+                (int) $row['carrier_id'],
+                (string) $row['carrier_cost'],
+                $id,
+                $key,
+                (string) ($row['dst_normalized'] ?? ''),
+                (string) ($row['currency'] ?? 'USD')
+            );
+        }
 
         if (($row['recording_status'] ?? '') === 'pending' && $customer !== null) {
             try {

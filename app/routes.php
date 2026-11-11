@@ -177,6 +177,12 @@ $router->group('', ['auth', 'tenant', 'features', 'csrf'], function (Router $r) 
     });
     $crud($r, '/trunks', new CarrierController('trunk'), $STAFF);
     $providerRates = new TariffController('carrier');
+    $r->get('/provider-rates/import', static fn () => Response::redirect(url('/tariffs/import?kind=carrier')));
+    $r->get('/provider-rates/export', static function ($req) {
+        $oid = (string) ($req->query('owner_id') ?? '');
+        $q = 'kind=carrier' . ($oid !== '' ? '&owner_id=' . rawurlencode($oid) : '');
+        return Response::redirect(url('/tariffs/export?' . $q));
+    });
     $r->post('/provider-rates/bulk-delete', [$providerRates, 'bulkDestroy'], [$STAFF]);
     $r->post('/provider-rates/bulk-rate-update', [$providerRates, 'bulkRateUpdate'], [$STAFF]);
     $crud($r, '/provider-rates', $providerRates, $STAFF);

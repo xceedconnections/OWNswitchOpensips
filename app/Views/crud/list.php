@@ -271,9 +271,10 @@ $ownerFilter = $ownerFilter ?? null;
                 $batchPriceLabel = (string) ($batchPriceLabel ?? 'Sell price');
                 $batchTrunkGroups = $batchTrunkGroups ?? null;
                 $batchPlanPrefixes = $batchPlanPrefixes ?? null;
+                $batchAllowDestination = !empty($batchAllowDestination);
             ?>
             <div class="modal fade" id="os-batch-rate-modal" tabindex="-1" aria-labelledby="os-batch-rate-title" aria-hidden="true">
-                <div class="modal-dialog">
+                <div class="modal-dialog modal-lg">
                     <form method="post" action="<?= e(url($base . '/bulk-rate-update')) ?>" class="modal-content" id="os-batch-rate-form">
                         <?= csrf_field() ?>
                         <input type="hidden" name="q" value="<?= e($q) ?>">
@@ -305,6 +306,26 @@ $ownerFilter = $ownerFilter ?? null;
                                         <option value="<?= e((string) $k) ?>"><?= e((string) $label) ?></option>
                                     <?php endforeach; ?>
                                 </select>
+                            </div>
+                            <?php endif; ?>
+                            <?php if ($batchAllowDestination): ?>
+                            <div class="row g-2 mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label" for="batch_destination">Destination</label>
+                                    <input type="text" class="form-control form-control-sm" name="destination" id="batch_destination" placeholder="Blank = unchanged" maxlength="120">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label" for="batch_status">Status</label>
+                                    <select name="status" id="batch_status" class="form-select form-select-sm">
+                                        <option value="">Leave unchanged</option>
+                                        <option value="active">Active</option>
+                                        <option value="disabled">Disabled</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label" for="batch_connect_fee">Connect fee</label>
+                                    <input type="text" class="form-control form-control-sm os-mono" name="connect_fee" id="batch_connect_fee" placeholder="Blank = unchanged" inputmode="decimal">
+                                </div>
                             </div>
                             <?php endif; ?>
                             <div class="mb-3">

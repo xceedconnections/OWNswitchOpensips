@@ -8,6 +8,7 @@ use Ownswitch\Http\Request;
 use Ownswitch\Http\Response;
 use Ownswitch\Repositories\CustomerRepository;
 use Ownswitch\Services\Billing\BillingPreviewService;
+use Ownswitch\Services\Billing\CarrierBalanceService;
 use Ownswitch\Services\Billing\LedgerService;
 use Ownswitch\Services\Billing\RatingService;
 use Ownswitch\Services\Mail\MailService;
@@ -42,7 +43,16 @@ final class BillingController extends BaseController
         return $this->view('billing/topup', [
             'title' => 'Refills',
             'customers' => $this->customerOptions($r),
-            'values' => ['customer_id' => '', 'type' => 'topup', 'amount' => '', 'description' => '', 'send_email' => '0'],
+            'providers' => $this->providerOptions(),
+            'values' => [
+                'target' => 'customer',
+                'customer_id' => '',
+                'carrier_id' => '',
+                'type' => 'topup',
+                'amount' => '',
+                'description' => '',
+                'send_email' => '0',
+            ],
             'errors' => [],
             'refillEmailsEnabled' => $mail->refillEmailsEnabled(),
         ]);
@@ -52,17 +62,29 @@ final class BillingController extends BaseController
     {
         $scope = $this->scope($r);
         $mail = new MailService($this->db());
+        $target = (string) ($r->post['target'] ?? 'customer') === 'provider' ? 'provider' : 'customer';
         $v = [
+            'target' => $target,
             'customer_id' => (string) ($r->post['customer_id'] ?? ''),
+            'carrier_id' => (string) ($r->post['carrier_id'] ?? ''),
             'type' => (string) ($r->post['type'] ?? 'topup'),
             'amount' => trim((string) ($r->post['amount'] ?? '')),
             'description' => trim((string) ($r->post['description'] ?? '')),
             'send_email' => !empty($r->post['send_email']) ? '1' : '0',
         ];
         $errors = [];
-        $cust = ctype_digit($v['customer_id']) ? (new CustomerRepository($this->db()))->find((int) $v['customer_id'], $scope) : null;
-        if ($cust === null) {
-            $errors[] = 'Select a valid customer.';
+        $cust = null;
+        $carrier = null;
+        if ($target === 'customer') {
+            $cust = ctype_digit($v['customer_id']) ? (new CustomerRepository($this->db()))->find((int) $v['customer_id'], $scope) : null;
+            if ($cust === null) {
+                $errors[] = 'Select a valid customer.';
+            }
+        } else {
+            $carrier = $this->findProvider((int) $v['carrier_id']);
+            if ($carrier === null) {
+                $errors[] = 'Select a valid provider.';
+            }
         }
         if (!in_array($v['type'], ['topup', 'adjustment', 'refund'], true)) {
             $errors[] = 'Invalid entry type.';
@@ -78,14 +100,37 @@ final class BillingController extends BaseController
             return $this->view('billing/topup', [
                 'title' => 'Refills',
                 'customers' => $this->customerOptions($r),
+                'providers' => $this->providerOptions(),
                 'values' => $v,
                 'errors' => $errors,
                 'refillEmailsEnabled' => $mail->refillEmailsEnabled(),
             ], 422);
         }
         $amount = $v['type'] === 'refund' ? bcmul($v['amount'], '-1', 6) : $v['amount'];
-        // Idempotency key includes a form nonce so a double-submit does not post twice.
         $nonce = is_string($r->post['nonce'] ?? null) ? (string) $r->post['nonce'] : bin2hex(random_bytes(8));
+
+        if ($target === 'provider') {
+            $svc = new CarrierBalanceService($this->db());
+            $res = $svc->post([
+                'carrier_id' => (int) $carrier['id'],
+                'entry_type' => $v['type'],
+                'amount' => RatingService::round($amount, 6),
+                'currency' => 'USD',
+                'idempotency_key' => "manual:provider:{$v['type']}:{$carrier['id']}:{$nonce}",
+                'description' => $v['description'],
+                'created_by' => (int) $this->user($r)['id'],
+            ]);
+            $this->audit($r, 'carrier_ledger_' . $v['type'], 'carrier_ledger_entries', $res['id'], null, [
+                'carrier_id' => $carrier['id'],
+                'amount' => $amount,
+            ]);
+            $bal = $svc->balance((int) $carrier['id']);
+            $msg = $res['duplicate']
+                ? 'Entry already posted (duplicate submit ignored).'
+                : 'Provider refill posted. Balance: ' . $bal;
+            return $this->redirect($r, '/providers', $msg);
+        }
+
         $ledger = new LedgerService($this->db());
         $res = $ledger->post([
             'customer_id' => (int) $cust['id'], 'reseller_id' => $cust['reseller_id'] !== null ? (int) $cust['reseller_id'] : null,
@@ -120,5 +165,32 @@ final class BillingController extends BaseController
             $o[$c['id']] = "{$c['name']} ({$c['code']}, {$c['billing_mode']}, {$c['currency']})";
         }
         return $o;
+    }
+
+    /** @return array<int|string,string> */
+    private function providerOptions(): array
+    {
+        $o = [];
+        try {
+            $svc = new CarrierBalanceService($this->db());
+            foreach ($this->db()->query('SELECT id, name FROM carriers ORDER BY name LIMIT 500')->fetchAll() as $c) {
+                $bal = $svc->balance((int) $c['id']);
+                $o[$c['id']] = $c['name'] . ' (balance ' . $bal . ')';
+            }
+        } catch (\Throwable) {
+        }
+        return $o;
+    }
+
+    /** @return array<string,mixed>|null */
+    private function findProvider(int $id): ?array
+    {
+        if ($id <= 0) {
+            return null;
+        }
+        $st = $this->db()->prepare('SELECT id, name, status FROM carriers WHERE id = ? LIMIT 1');
+        $st->execute([$id]);
+        $row = $st->fetch(\PDO::FETCH_ASSOC);
+        return $row === false ? null : $row;
     }
 }

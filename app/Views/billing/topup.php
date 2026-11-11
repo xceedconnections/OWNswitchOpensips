@@ -1,37 +1,61 @@
 <?php
-/** @var array $customers @var array $values @var list<string> $errors @var bool $refillEmailsEnabled */
+/** @var array $customers @var array $providers @var array $values @var list<string> $errors @var bool $refillEmailsEnabled */
 $refillEmailsEnabled = !empty($refillEmailsEnabled);
 $sendEmail = (($values['send_email'] ?? '0') === '1');
+$target = (($values['target'] ?? 'customer') === 'provider') ? 'provider' : 'customer';
+$providers = $providers ?? [];
 ?>
 <div class="os-page-head">
     <div>
         <h1 class="os-page-title">Refills</h1>
-        <p class="os-page-sub">Posts an append-only ledger entry — mistakes are fixed with a reversal</p>
+        <p class="os-page-sub">Credit a customer or a provider account. Provider balance is bookkeeping only — trunks keep working even when empty.</p>
     </div>
 </div>
 <?php foreach ($errors as $err): ?><div class="alert alert-danger py-2"><?= e($err) ?></div><?php endforeach; ?>
-<?php if (!$customers): ?>
-    <div class="os-panel"><div class="os-empty"><div class="os-empty-title">No customers</div><div>Create a customer first.</div></div></div>
+<?php if (!$customers && !$providers): ?>
+    <div class="os-panel"><div class="os-empty"><div class="os-empty-title">Nothing to refill</div><div>Create a customer or provider first.</div></div></div>
 <?php else: ?>
-<form method="post" action="<?= e(url('/billing/refill')) ?>" class="os-panel col-12 p-3 p-md-4">
+<form method="post" action="<?= e(url('/billing/refill')) ?>" class="os-panel col-12 p-3 p-md-4" id="refill-form">
     <?= csrf_field() ?>
     <input type="hidden" name="nonce" value="<?= e(bin2hex(random_bytes(8))) ?>">
-    <div class="mb-3"><label class="form-label fw-semibold" for="customer_id">Customer</label>
-        <select class="form-select" id="customer_id" name="customer_id" required><option value="">— select —</option>
-            <?php foreach ($customers as $id => $n): ?><option value="<?= e($id) ?>"<?= (string) $values['customer_id'] === (string) $id ? ' selected' : '' ?>><?= e($n) ?></option><?php endforeach; ?>
-        </select></div>
+    <div class="mb-3">
+        <label class="form-label fw-semibold" for="target">Account</label>
+        <select class="form-select" id="target" name="target">
+            <option value="customer"<?= $target === 'customer' ? ' selected' : '' ?>>Refill customer</option>
+            <option value="provider"<?= $target === 'provider' ? ' selected' : '' ?>>Refill provider</option>
+        </select>
+    </div>
+    <div class="mb-3" data-refill-pane="customer">
+        <label class="form-label fw-semibold" for="customer_id">Customer</label>
+        <select class="form-select" id="customer_id" name="customer_id">
+            <option value="">— select —</option>
+            <?php foreach ($customers as $id => $n): ?>
+                <option value="<?= e((string) $id) ?>"<?= (string) ($values['customer_id'] ?? '') === (string) $id ? ' selected' : '' ?>><?= e($n) ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div class="mb-3" data-refill-pane="provider" hidden>
+        <label class="form-label fw-semibold" for="carrier_id">Provider</label>
+        <select class="form-select" id="carrier_id" name="carrier_id">
+            <option value="">— select —</option>
+            <?php foreach ($providers as $id => $n): ?>
+                <option value="<?= e((string) $id) ?>"<?= (string) ($values['carrier_id'] ?? '') === (string) $id ? ' selected' : '' ?>><?= e($n) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <div class="form-text">Buy-side call charges deduct from this balance. Empty balance does not stop trunks.</div>
+    </div>
     <div class="mb-3"><label class="form-label fw-semibold" for="type">Type</label>
         <select class="form-select" id="type" name="type">
-            <option value="topup"<?= $values['type'] === 'topup' ? ' selected' : '' ?>>Top-up (credit)</option>
-            <option value="adjustment"<?= $values['type'] === 'adjustment' ? ' selected' : '' ?>>Adjustment (+/-)</option>
-            <option value="refund"<?= $values['type'] === 'refund' ? ' selected' : '' ?>>Refund (debit)</option>
+            <option value="topup"<?= ($values['type'] ?? '') === 'topup' ? ' selected' : '' ?>>Top-up (credit)</option>
+            <option value="adjustment"<?= ($values['type'] ?? '') === 'adjustment' ? ' selected' : '' ?>>Adjustment (+/-)</option>
+            <option value="refund"<?= ($values['type'] ?? '') === 'refund' ? ' selected' : '' ?>>Refund (debit)</option>
         </select></div>
     <div class="mb-3"><label class="form-label fw-semibold" for="amount">Amount</label>
-        <input class="form-control" id="amount" name="amount" value="<?= e($values['amount']) ?>" inputmode="decimal" maxlength="20" required>
+        <input class="form-control" id="amount" name="amount" value="<?= e((string) ($values['amount'] ?? '')) ?>" inputmode="decimal" maxlength="20" required>
         <div class="form-text">Positive decimal, up to 6 places. Adjustments may be negative.</div></div>
     <div class="mb-3"><label class="form-label fw-semibold" for="description">Description / reason</label>
-        <input class="form-control" id="description" name="description" value="<?= e($values['description']) ?>" maxlength="200" required></div>
-    <div class="mb-3">
+        <input class="form-control" id="description" name="description" value="<?= e((string) ($values['description'] ?? '')) ?>" maxlength="200" required></div>
+    <div class="mb-3" data-refill-pane="customer">
         <div class="form-check">
             <input class="form-check-input" type="checkbox" id="send_email" name="send_email" value="1"<?= $sendEmail ? ' checked' : '' ?><?= $refillEmailsEnabled ? '' : ' disabled' ?>>
             <label class="form-check-label" for="send_email">Send email upon refill</label>
@@ -44,4 +68,27 @@ $sendEmail = (($values['send_email'] ?? '0') === '1');
     </div>
     <button class="btn btn-primary" type="submit" data-once><i class="bi bi-wallet2 me-1"></i>Post entry</button>
 </form>
+<script>
+(function () {
+  var sel = document.getElementById('target');
+  if (!sel) return;
+  var sync = function () {
+    var t = sel.value === 'provider' ? 'provider' : 'customer';
+    document.querySelectorAll('[data-refill-pane]').forEach(function (el) {
+      var show = el.getAttribute('data-refill-pane') === t;
+      el.hidden = !show;
+      el.querySelectorAll('select,input').forEach(function (inp) {
+        if (inp.id === 'send_email') return;
+        if (show && (inp.id === 'customer_id' || inp.id === 'carrier_id')) {
+          inp.required = true;
+        } else if (inp.id === 'customer_id' || inp.id === 'carrier_id') {
+          inp.required = false;
+        }
+      });
+    });
+  };
+  sel.addEventListener('change', sync);
+  sync();
+})();
+</script>
 <?php endif; ?>

@@ -326,7 +326,7 @@ final class CustomerController extends CrudController
                     'customer_rate_overrides',
                     'destination_policies',
                     'recordings',
-                    'call_reservations',
+                    'balance_reservations',
                     'balances',
                     'ip_endpoints',
                     'sip_accounts',
@@ -335,9 +335,18 @@ final class CustomerController extends CrudController
             ) {
                 try {
                     $pdo->prepare("DELETE FROM `{$table}` WHERE customer_id = ?")->execute([$id]);
-                } catch (\PDOException) {
-                    // optional tables / naming differences
+                } catch (\PDOException $e) {
+                    error_log('[ownswitch] user delete cleanup ' . $table . ': ' . $e->getMessage());
+                    if (in_array($table, ['sip_accounts', 'balances', 'users'], true)) {
+                        throw $e;
+                    }
                 }
+            }
+            // Confirm SIP users are gone before removing the customer row.
+            $left = $pdo->prepare('SELECT COUNT(*) FROM sip_accounts WHERE customer_id = ?');
+            $left->execute([$id]);
+            if ((int) $left->fetchColumn() > 0) {
+                throw new \RuntimeException('SIP users could not be deleted for this account.');
             }
             $pdo->commit();
         } catch (\Throwable $e) {
