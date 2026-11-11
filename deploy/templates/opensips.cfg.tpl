@@ -186,12 +186,16 @@ route {
 		exit;
 	}
 
-	# SIP keep-alive towards us
-	if (is_method("OPTIONS") && !$rU) {
-		send_reply(200, "OK");
-		exit;
-	}
+	# SIP keep-alive / portal Live latency:
+	# Empty OPTIONS → local 200. OPTIONS sip:user@us → lookup + relay to contact
+	# so SipOptionsProbe(rtt via public IP:5060 + username) measures real UA latency.
 	if (is_method("OPTIONS")) {
+		if ($rU != NULL && $(rU{s.len}) > 0 && lookup("location")) {
+			if (!t_relay()) {
+				send_reply(500, "Error");
+			}
+			exit;
+		}
 		send_reply(200, "OK");
 		exit;
 	}
@@ -375,6 +379,7 @@ route {
 	route(apply_ruri_strip);
 	route(apply_sip_cid);
 	route(check_cid_len);
+	route(check_cli_restriction);
 	route(apply_trunk_attrs);
 	route(check_trunk_cid_len);
 	route(check_rate_cap);
@@ -758,6 +763,9 @@ route[check_cid_len] {
 # (OPENSIPS_RATE_CAP_ROUTE injected on its own line — never put multiline placeholders inside # comments)
 @@OPENSIPS_RATE_CAP_ROUTE@@
 
+# CLI Restriction lists (Settings → CLI Restriction) — block presented CLI with 403
+@@OPENSIPS_CLI_RESTRICT_ROUTE@@
+
 # DNC: trunk attrs dncid=N → Redis SISMEMBER or indexed MySQL dnc_cache (never PHP exec)
 @@OPENSIPS_DNC_ROUTE@@
 
@@ -863,6 +871,7 @@ failure_route[carrier_failover] {
 		route(apply_ruri_strip);
 		route(apply_sip_cid);
 		route(check_cid_len);
+		route(check_cli_restriction);
 		route(apply_trunk_attrs);
 		route(check_trunk_cid_len);
 		route(check_rate_cap);

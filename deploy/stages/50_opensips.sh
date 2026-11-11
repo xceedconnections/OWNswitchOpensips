@@ -402,8 +402,8 @@ route[check_dnc] {
 fi
 
 # Rate CAP via portal PHP (exec → bin/dial-cap-check.php)
+_cap_php="$(command -v php || echo /usr/bin/php)"
 if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
-  _cap_php="$(command -v php || echo /usr/bin/php)"
   _cap_script="/opt/ownswitch/current/bin/dial-cap-check.php"
   [[ -f "${_cap_script}" ]] || _cap_script="/opt/ownswitch-src/bin/dial-cap-check.php"
   if (( HAVE_EXEC )) && [[ -f "${_cap_script}" ]]; then
@@ -439,6 +439,42 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 	return;
 }'
     log_warn "Rate CAP: exec/dial-cap-check missing — stub only"
+  fi
+fi
+
+# CLI Restriction lists (block presented CallerID)
+if [[ -z "${OPENSIPS_CLI_RESTRICT_ROUTE:-}" ]]; then
+  _cli_script="/opt/ownswitch/current/bin/cli-restrict-check.php"
+  [[ -f "${_cli_script}" ]] || _cli_script="/opt/ownswitch-src/bin/cli-restrict-check.php"
+  if (( HAVE_EXEC )) && [[ -f "${_cli_script}" ]]; then
+    export OPENSIPS_CLI_RESTRICT_ROUTE='route[check_cli_restriction] {
+	$var(cli_user) = $au;
+	if ($var(cli_user) == NULL || $(var(cli_user){s.len}) == 0) {
+		$var(cli_user) = $dlg_val(os_src);
+	}
+	if ($var(cli_user) == NULL || $(var(cli_user){s.len}) == 0) {
+		return;
+	}
+	$var(cli_digits) = $(dlg_val(os_cli){re.subst,/[^0-9]//g});
+	if ($var(cli_digits) == NULL || $(var(cli_digits){s.len}) < 3) {
+		$var(cli_digits) = $(fU{re.subst,/[^0-9]//g});
+	}
+	if ($var(cli_digits) == NULL || $(var(cli_digits){s.len}) < 3) {
+		return;
+	}
+	if (!exec("'"${_cap_php}"' '"${_cli_script}"' $var(cli_user) $var(cli_digits)")) {
+		xlog("L_WARN", "CLI restricted user=$var(cli_user) cli=$var(cli_digits)\n");
+		acc_db_request("403 CLI restricted", "acc");
+		send_reply(403, "CLI restricted");
+		exit;
+	}
+}'
+    log_info "CLI restriction: exec → ${_cli_script}"
+  else
+    export OPENSIPS_CLI_RESTRICT_ROUTE='route[check_cli_restriction] {
+	return;
+}'
+    log_warn "CLI restriction: exec/cli-restrict-check missing — stub only"
   fi
 fi
 

@@ -538,10 +538,42 @@ final class SipUserController extends CrudController
                 $state = $online ? 'REACHABLE' : '';
             }
 
+            // Dynamic REGED UAs sit behind NAT — probe via OpenSIPS (OPTIONS sip:user@public:5060
+            // is looked up + relayed to the contact). Direct OPTIONS to received:port usually fails.
+            if ($online && $qualify && ($ms === null || $ms <= 0) && $user !== '') {
+                $probeHost = trim((string) App::config('app.integrations.opensips.public_ip', ''));
+                if ($probeHost === '') {
+                    $probeHost = trim((string) App::config('app.integrations.opensips.sip_domain', ''));
+                }
+                $probePort = (int) App::config('app.integrations.opensips.sip_port', 5060);
+                if ($probePort <= 0) {
+                    $probePort = 5060;
+                }
+                if ($probeHost !== '') {
+                    $ms = SipOptionsProbe::rttMs($probeHost, $probePort, 2.5, $user);
+                }
+                if (($ms === null || $ms <= 0) && is_array($reg)) {
+                    foreach (['received', 'contact'] as $uriKey) {
+                        $uri = trim((string) ($reg[$uriKey] ?? ''));
+                        if ($uri === '') {
+                            continue;
+                        }
+                        $ep = SipOptionsProbe::endpointFromUri($uri);
+                        if ($ep === null || $ep['host'] === '') {
+                            continue;
+                        }
+                        $ms = SipOptionsProbe::rttMs($ep['host'], $ep['port'], 1.5, $user !== '' ? $user : ($ep['user'] ?: null));
+                        if ($ms !== null && $ms > 0) {
+                            break;
+                        }
+                    }
+                }
+            }
+
             // Same shape as trunk Live column: green/red + REGED / ms.
             $row['presence'] = [
                 'online' => $online,
-                'ms' => $ms,
+                'ms' => ($ms !== null && $ms > 0) ? $ms : null,
                 'state' => $state,
                 'contact' => $reg['contact'] ?? '',
                 'received' => $reg['received'] ?? '',
@@ -549,7 +581,7 @@ final class SipUserController extends CrudController
             $row['reg_status'] = $online ? 'registered' : 'offline';
             $row['latency_ms'] = [
                 'online' => $online,
-                'ms' => $ms,
+                'ms' => ($ms !== null && $ms > 0) ? $ms : null,
                 'state' => $state !== '' ? $state : ($online ? 'REGED' : 'offline'),
             ];
         }
