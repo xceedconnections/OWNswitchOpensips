@@ -411,16 +411,36 @@ pkg_installed() {
   [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)" == *"install ok installed"* ]]
 }
 
-apt_install() { # packages... (installs only the ones that are missing)
-  local missing=() p
-  for p in "$@"; do pkg_installed "$p" || missing+=("$p"); done
+# True when apt knows a candidate for the package (avoids fatal "Unable to locate package").
+pkg_available() {
+  local cand
+  cand="$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+  [[ -n "$cand" && "$cand" != "(none)" ]]
+}
+
+apt_install() { # packages... (installs only missing + available packages)
+  local missing=() skip=() p
+  for p in "$@"; do
+    if pkg_installed "$p"; then
+      continue
+    fi
+    if pkg_available "$p"; then
+      missing+=("$p")
+    else
+      skip+=("$p")
+      log_warn "apt package not in repositories (skipped): ${p}"
+    fi
+  done
+  if ((${#skip[@]})); then
+    log_info "skipped unavailable packages: ${skip[*]}"
+  fi
   if (( ${#missing[@]} )); then
     log_info "apt install: ${missing[*]}"
     apt_wait_lock
     apt-get install "${APT_OPTS[@]}" --no-install-recommends "${missing[@]}"
     note_change "installed packages: ${missing[*]}"
   else
-    log_info "apt packages already installed: $*"
+    log_info "apt packages already installed (or none available): $*"
   fi
 }
 

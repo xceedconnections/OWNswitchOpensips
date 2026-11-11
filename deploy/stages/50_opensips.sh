@@ -29,7 +29,10 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Packages
 # ---------------------------------------------------------------------------
-# auth.so is in opensips-auth-modules (not the base package).
+# OpenSIPS 3.6 noble apt: core modules (dialog, drouting, rtpengine, nathelper,
+# uac, cfgutils, proto_udp/tcp/ws, …) ship inside the base "opensips" package.
+# Separate debs exist only for modules with heavy/extra deps — see apt.opensips.org.
+# There is NO opensips-nathelper-module / opensips-rtpengine-module / opensips-websocket-module.
 PKGS=(
   opensips
   opensips-cli
@@ -37,17 +40,13 @@ PKGS=(
   opensips-mysql-dbschema
   opensips-auth-modules
   opensips-http-modules
-  opensips-presence-modules
   opensips-cgrates-module
-  opensips-nathelper-module
 )
 apt_install "${PKGS[@]}"
-# rtpengine / drouting / dialplan / websocket package names vary by OpenSIPS build
-apt_install_optional opensips-rtpengine-module opensips-db-modules opensips-dialplan-module \
-  opensips-uac-module opensips-tls-module opensips-websocket-module \
-  opensips-http-module opensips-json-module opensips-restclient-module \
-  opensips-prometheus-module opensips-cachedb-redis-module opensips-module-cachedb-redis \
-  opensips-exec-module opensips-module-exec
+# Optional extras that exist on apt.opensips.org (each tried separately)
+apt_install_optional opensips-dialplan-module opensips-tls-module opensips-wss-module \
+  opensips-json-module opensips-restclient-module opensips-prometheus-module \
+  opensips-redis-module opensips-presence-modules
 
 # ---------------------------------------------------------------------------
 # 3. Module path + required .so
@@ -63,7 +62,7 @@ for so in db_mysql.so auth.so auth_db.so usrloc.so registrar.so dialog.so permis
   [[ -f "${OPENSIPS_MPATH}${so}" ]] || die "Missing required module: ${OPENSIPS_MPATH}${so}"
 done
 if [[ ! -f "${OPENSIPS_MPATH}rtpengine.so" ]]; then
-  die "Missing rtpengine.so — install opensips-rtpengine-module (required for media relay/record)"
+  die "Missing rtpengine.so under ${OPENSIPS_MPATH} (expected in base opensips package)"
 fi
 if [[ ! -f "${OPENSIPS_MPATH}cgrates.so" ]]; then
   log_warn "cgrates.so missing — billing auth in opensips.cfg may fail until opensips-cgrates-module is installed"
@@ -230,9 +229,9 @@ if (( HAVE_PROTO_WS )); then
   export OPENSIPS_WS_SOCKET_BLOCK='socket=ws:127.0.0.1:5066'
   log_info "WebRTC: proto_ws.so present — enabling ws:127.0.0.1:5066"
 else
-  export OPENSIPS_WS_MODULE_BLOCK='# proto_ws.so not installed — install opensips-websocket-module for WebRTC'
+  export OPENSIPS_WS_MODULE_BLOCK='# proto_ws.so not found — install opensips (base) / opensips-wss-module for WebRTC'
   export OPENSIPS_WS_SOCKET_BLOCK='# socket=ws:127.0.0.1:5066'
-  log_warn "opensips-websocket-module missing — WebRTC dialer needs: apt-get install -y opensips-websocket-module"
+  log_warn "proto_ws.so missing — WebRTC dialer needs opensips with WebSocket support (try: apt-get install -y opensips-wss-module)"
 fi
 
 # ---------------------------------------------------------------------------

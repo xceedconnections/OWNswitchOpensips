@@ -31,7 +31,7 @@ status() {
     return 0
   fi
   if ! have_ws_so; then
-    echo "message=opensips-websocket-module is not installed. Run: apt-get install -y opensips-websocket-module"
+    echo "message=proto_ws.so missing. Try: apt-get install -y opensips-wss-module"
     return 1
   fi
   echo "message=WebSocket SIP is not active yet. Use Enable in the portal or: sudo ownswitch-webrtc enable"
@@ -40,11 +40,13 @@ status() {
 
 enable() {
   export DEBIAN_FRONTEND=noninteractive
+  # OpenSIPS 3.6 apt name is opensips-wss-module (legacy name opensips-websocket-module does not exist)
+  apt-get install -y opensips-wss-module 2>/dev/null || true
   apt-get install -y opensips-websocket-module 2>/dev/null || true
   if ! have_ws_so; then
     echo "enabled=0"
     echo "listening=0"
-    echo "message=Could not install opensips-websocket-module (proto_ws.so missing)."
+    echo "message=Could not enable WebSocket SIP (proto_ws.so missing after opensips-wss-module)."
     return 1
   fi
   [[ -f "$CFG" ]] || { echo "message=Missing ${CFG}"; return 1; }
