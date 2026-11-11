@@ -5,10 +5,15 @@
  * @var array $data
  * @var array<string, list<array{key:string,label:string,path:?string,enabled:bool}>> $featureGroups
  * @var bool|null $canWrite
+ * @var bool|null $showFeatureGrants
+ * @var bool|null $canDelete
+ * @var bool|null $asVendor
  */
 $isEdit = $existing !== null;
 $canWrite = $canWrite ?? true;
 $viewOnly = !$canWrite;
+$showFeatureGrants = $showFeatureGrants ?? true;
+$canDelete = $canDelete ?? $isEdit;
 $action = $isEdit
     ? url('/settings/user-access/' . (int) $existing['id'])
     : url('/settings/user-access');
@@ -16,7 +21,9 @@ $action = $isEdit
 <div class="os-page-head">
     <div>
         <h1 class="os-page-title"><?= e($title) ?></h1>
-        <p class="os-page-sub">Sub-admin portal login with a restricted menu set</p>
+        <p class="os-page-sub"><?= $showFeatureGrants
+            ? 'Sub-admin portal login with a restricted menu set'
+            : 'Change this admin’s name, email, status, or password' ?></p>
     </div>
     <a class="btn btn-outline-secondary btn-sm" href="<?= e(url('/settings/user-access')) ?>">Back</a>
 </div>
@@ -48,6 +55,7 @@ $action = $isEdit
         </div>
     </div>
 
+    <?php if ($showFeatureGrants): ?>
     <div class="os-form-section-kicker mb-2">Allowed menus</div>
     <p class="small text-muted mb-3">Only features you can use (and that Admin Access has enabled) appear here. Unchecked menus are hidden and blocked by URL.</p>
 
@@ -81,21 +89,23 @@ $action = $isEdit
             </div>
         <?php endforeach; ?>
     <?php endif; ?>
+    <?php endif; ?>
 
     <?php if (!$viewOnly): ?>
         <div class="d-flex flex-wrap gap-2">
             <button class="btn btn-primary" type="submit" data-once>Save</button>
-            <?php if ($isEdit): ?>
+            <?php if ($isEdit && $canDelete): ?>
                 <button class="btn btn-outline-danger" type="submit" form="ua-delete" data-once onclick="return confirm('Delete this sub-admin?');">Delete</button>
             <?php endif; ?>
         </div>
     <?php endif; ?>
 </form>
-<?php if ($isEdit && !$viewOnly): ?>
+<?php if ($isEdit && !$viewOnly && $canDelete): ?>
 <form id="ua-delete" method="post" action="<?= e(url('/settings/user-access/' . (int) $existing['id'] . '/delete')) ?>" class="d-none">
     <?= csrf_field() ?>
 </form>
 <?php endif; ?>
+<?php if ($showFeatureGrants): ?>
 <script>
 document.querySelectorAll('[data-feat-all]').forEach(function (btn) {
   btn.addEventListener('click', function () {
@@ -104,3 +114,4 @@ document.querySelectorAll('[data-feat-all]').forEach(function (btn) {
   });
 });
 </script>
+<?php endif; ?>

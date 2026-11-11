@@ -53,7 +53,8 @@ modparam("tm", "restart_fr_on_each_reply", 0)
 modparam("tm", "onreply_avp_mode", 1)
 
 loadmodule "rr.so"
-modparam("rr", "append_fromtag", 0)
+# append_fromtag=1 required by uac.so uac_auth() restore mode (vendor INVITE digest)
+modparam("rr", "append_fromtag", 1)
 
 loadmodule "maxfwd.so"
 loadmodule "sipmsgops.so"
@@ -253,8 +254,8 @@ route {
 	# still proxy_authorize so load_credentials fills os_cid_mode / os_dncid / media AVPs.
 	# Without that, Softphone Display Name mode never runs (AVPs stay NULL → passthrough).
 	# Carrier ACL → deliver only if local AOR exists; else fall through to digest.
-	# 4th arg captures address.context_info (sip:username) for IP peers without digest.
-	if (check_source_address(1, $sp, "any", $avp(os_addr_ctx))) {
+	# OpenSIPS 3.6 permissions: avoid 4th/context AVP here (partition <<null>> fixup error).
+	if (check_source_address(1, $sp, "any")) {
 		if (is_present_hf("Proxy-Authorization") || is_present_hf("Authorization")) {
 			if (proxy_authorize("", "subscriber")) {
 				$avp(os_auth_user) = $au;
@@ -494,12 +495,24 @@ route[inbound_from_carrier_deliver] {
 # Direct = skip RTPengine; Relay = rtpengine_manage(); Record = rtpengine + recording
 # dtmf_pass=0/no → strip telephone-event so RFC2833 DTMF is not negotiated
 route[apply_media] {
+	# WebRTC (ws/wss): bridge browser SAVPF/DTLS ↔ PSTN RTP/AVP via RTPengine
+	if ($socket_in(proto) == "ws" || $socket_in(proto) == "wss") {
+		$avp(os_media) = "relay";
+		$dlg_val(os_webrtc) = "1";
+		xlog("L_INFO", "media forced relay for WebRTC proto=$socket_in(proto) user=$fU\n");
+	}
 	$var(dtmf_flags) = "";
 	if ($avp(os_dtmf) == "no" || $avp(os_dtmf) == "0") {
 		$var(dtmf_flags) = " codec-strip-telephone-event";
 	}
 	if ($avp(os_media) == "direct") {
 		xlog("L_INFO", "media=direct for $fU (no rtpengine)\n");
+		return;
+	}
+	# Offer toward PSTN: use rtpengine_offer() so DTLS stays on the WebRTC leg
+	if ($dlg_val(os_webrtc) == "1") {
+		xlog("L_INFO", "rtpengine_offer WebRTC→PSTN user=$fU\n");
+		rtpengine_offer("replace-session-connection replace-origin ICE=remove RTP/AVP DTLS=off SDES=off rtcp-mux-demux$var(dtmf_flags)");
 		return;
 	}
 	if ($avp(os_media) == "record") {
@@ -511,7 +524,7 @@ route[apply_media] {
 		rtpengine_manage("replace-session-connection replace-origin ICE=remove$var(dtmf_flags)");
 		return;
 	}
-	rtpengine_manage();
+	rtpengine_manage("replace-session-connection replace-origin ICE=remove");
 }
 
 # SIP-user CallerID policy (before trunk From override):
@@ -535,6 +548,25 @@ route[apply_sip_cid] {
 	$var(dom) = $fd;
 	if ($var(dom) == NULL || $(var(dom){s.len}) == 0) {
 		$var(dom) = $td;
+	}
+
+	# Web dialer sends CallerID as X-Ownswitch-Cli (not From) — honor it first
+	if (is_present_hf("X-Ownswitch-Cli")) {
+		$var(web_cli) = $(hdr(X-Ownswitch-Cli){re.subst,#[^0-9+]##g});
+		if ($(var(web_cli){s.len}) >= 3 && $(var(web_cli){s.len}) <= 30
+			&& ($var(web_cli) =~ "^[+0-9]{3,30}$")) {
+			$dlg_val(os_cli) = $var(web_cli);
+			$acc_extra(cli) = $var(web_cli);
+			$var(user) = $var(web_cli);
+			remove_hf("From");
+			append_hf("From: <sip:$var(user)@$var(dom)>;tag=$ft\r\n");
+			remove_hf("P-Asserted-Identity");
+			append_hf("P-Asserted-Identity: <sip:$var(user)@$var(dom)>\r\n");
+			remove_hf("Remote-Party-ID");
+			append_hf("Remote-Party-ID: <sip:$var(user)@$var(dom)>;party=calling;privacy=off;screen=yes\r\n");
+			xlog("L_INFO", "SIP CID from webphone X-Ownswitch-Cli=$var(web_cli)\n");
+			return;
+		}
 	}
 
 	# ---- Collect Display Name / CLI digits from every place Eyebeam may put them ----
@@ -642,6 +674,10 @@ route[apply_sip_cid] {
 # ACC extras after CID/trunk rewrite: keep SIP user in src, presented CLI in cli, trunk gwid in gw
 # Never use $fU for cli after From rewrite — $fU stays as the original SIP username.
 route[acc_cli_gw] {
+	# talk is INT — never leave as empty string (MySQL 1366 under STRICT)
+	if ($acc_extra(talk) == NULL || $(acc_extra(talk){s.len}) == 0) {
+		$acc_extra(talk) = 0;
+	}
 	$acc_extra(src) = $dlg_val(os_src);
 	$acc_extra(dst) = $dlg_val(os_dst);
 	$acc_extra(ip) = $si;
@@ -703,6 +739,14 @@ route[apply_trunk_attrs] {
 	$var(fd) = $(var(attrs){param.value,fd});
 	$var(cidadd) = $(var(attrs){param.value,cidadd});
 	$var(cidrem) = $(var(attrs){param.value,cidrem});
+	# Digest for vendor INVITE 401/407 (Register/Invite trunks) → uac_auth AVPs
+	# Realm is taken from WWW-Authenticate in failure_route (often "asterisk", not the host).
+	$var(au) = $(var(attrs){param.value,au});
+	$var(ap) = $(var(attrs){param.value,ap});
+	if ($var(au) != NULL && $(var(au){s.len}) > 0 && $var(ap) != NULL && $(var(ap){s.len}) > 0) {
+		$avp(auth_username) = $(var(au){s.unescape.param});
+		$avp(auth_password) = $(var(ap){s.unescape.param});
+	}
 
 	if ($dlg_val(os_cli) != NULL && $(dlg_val(os_cli){s.len}) > 0) {
 		$var(user) = $dlg_val(os_cli);
@@ -718,6 +762,10 @@ route[apply_trunk_attrs] {
 	if ($var(cidadd) != NULL && $(var(cidadd){s.len}) > 0) {
 		$var(user) = $(var(cidadd){s.unescape.param}) + $var(user);
 	}
+	# Presented CLI for CDR / PAI (do not let trunk fu= wipe it)
+	$var(cli_out) = $var(user);
+	$var(cli_out) = $(var(cli_out){re.subst,#[^0-9A-Za-z+_-]##g});
+	# Trunk From user (Register identity) — auth still via uac_auth; keep os_cli as presented CLI
 	if ($var(fu) != NULL && $(var(fu){s.len}) > 0) {
 		$var(user) = $(var(fu){s.unescape.param});
 	}
@@ -729,12 +777,23 @@ route[apply_trunk_attrs] {
 	}
 	if (($var(fu) != NULL && $(var(fu){s.len}) > 0) || ($var(fd) != NULL && $(var(fd){s.len}) > 0)
 		|| ($var(cidadd) != NULL && $(var(cidadd){s.len}) > 0) || ($var(cidrem) != NULL && $(var(cidrem){s.len}) > 0)) {
-		$dlg_val(os_cli) = $var(user);
+		# Keep CDR CallerID as presented number (webphone / display_name), not trunk auth user
+		if ($(var(cli_out){s.len}) >= 3 && ($var(cli_out) =~ "^[+0-9]{3,30}$")) {
+			$dlg_val(os_cli) = $var(cli_out);
+		}
 		remove_hf("From");
 		append_hf("From: <sip:$var(user)@$var(dom)>;tag=$ft\r\n");
-		remove_hf("P-Asserted-Identity");
-		append_hf("P-Asserted-Identity: <sip:$var(user)@$var(dom)>\r\n");
-		xlog("L_INFO", "trunk From rewrite to sip:$var(user)@$var(dom) os_cli=$dlg_val(os_cli)\n");
+		# Present real CLI toward vendor (many Asterisk peers honor PAI/RPID)
+		if ($(var(cli_out){s.len}) >= 3 && ($var(cli_out) =~ "^[+0-9]{3,30}$")) {
+			remove_hf("P-Asserted-Identity");
+			append_hf("P-Asserted-Identity: <sip:$var(cli_out)@$var(dom)>\r\n");
+			remove_hf("Remote-Party-ID");
+			append_hf("Remote-Party-ID: <sip:$var(cli_out)@$var(dom)>;party=calling;privacy=off;screen=yes\r\n");
+		} else {
+			remove_hf("P-Asserted-Identity");
+			append_hf("P-Asserted-Identity: <sip:$var(user)@$var(dom)>\r\n");
+		}
+		xlog("L_INFO", "trunk From=sip:$var(user)@$var(dom) presented_cli=$dlg_val(os_cli)\n");
 	}
 }
 
@@ -849,12 +908,43 @@ route[relay] {
 
 onreply_route[handle_reply] {
 	if (has_body("application/sdp") && $avp(os_media) != "direct") {
-		rtpengine_manage();
+		# Answer toward WebRTC: DTLS-SRTP + ICE (fixes JsSIP "Bad Media Description")
+		if ($dlg_val(os_webrtc) == "1") {
+			xlog("L_INFO", "rtpengine_answer PSTN→WebRTC code=$rs\n");
+			rtpengine_answer("replace-session-connection replace-origin ICE=force RTP/SAVPF DTLS=passive SDES=off rtcp-mux-offer");
+		} else {
+			rtpengine_manage("replace-session-connection replace-origin ICE=remove");
+		}
 	}
 }
 
 failure_route[carrier_failover] {
 	if (t_was_cancelled()) {
+		exit;
+	}
+	# Vendor digest challenge on INVITE (Register / Invite trunks) — answer once then re-relay
+	if (t_check_status("401|407")) {
+		if ($avp(os_uac_authed) == NULL) {
+			$avp(os_uac_authed) = 1;
+			# Realm must come from vendor WWW-/Proxy-Authenticate when auth_realm_avp is configured
+			$var(ch) = $(<reply>hdr(WWW-Authenticate));
+			if ($var(ch) == NULL || $(var(ch){s.len}) == 0) {
+				$var(ch) = $(<reply>hdr(Proxy-Authenticate));
+			}
+			$avp(auth_realm) = $(var(ch){re.subst,/.*realm="([^"]*)".*/\1/});
+			if ($avp(auth_realm) == NULL || $(avp(auth_realm){s.len}) == 0) {
+				$avp(auth_realm) = $(var(ch){re.subst,/.*realm=([^,\s]+).*/\1/});
+			}
+			xlog("L_INFO", "vendor challenge $T_reply_code realm=$avp(auth_realm) user=$avp(auth_username)\n");
+			if (uac_auth()) {
+				xlog("L_INFO", "uac_auth() after vendor challenge $T_reply_code\n");
+				t_on_failure("carrier_failover");
+				t_relay();
+				exit;
+			}
+			xlog("L_WARN", "uac_auth() failed after $T_reply_code (missing au=/ap= or realm)\n");
+		}
+		rtpengine_delete();
 		exit;
 	}
 	# Only fail over on codes from Settings → Failover SIP codes (synced below)

@@ -502,7 +502,42 @@ final class OpensipsProvisioner
         if ($tid > 0) {
             $parts[] = 'tid=' . $tid;
         }
-        foreach (['fu' => 'from_user', 'fd' => 'from_domain', 'cidadd' => 'cid_add_prefix', 'cidrem' => 'cid_remove_prefix'] as $k => $col) {
+        $mode = strtolower(trim((string) ($trunk['auth_mode'] ?? 'ip')));
+        $fromUser = trim((string) ($trunk['from_user'] ?? ''));
+        $fromDomain = trim((string) ($trunk['from_domain'] ?? ''));
+        $authUser = trim((string) ($trunk['auth_username'] ?? ''));
+        $authPass = '';
+        $enc = (string) ($trunk['auth_secret_enc'] ?? '');
+        if ($enc !== '' && ($mode === 'register' || $mode === 'invite')) {
+            try {
+                $authPass = Crypto::decrypt($enc);
+            } catch (\Throwable) {
+                $authPass = '';
+            }
+        }
+        // Register trunks must present as the registered AOR toward the vendor.
+        // Without fu=/fd=, From stays as the SIP-user (e.g. owner) → vendor 401 Authentication Error.
+        if ($mode === 'register') {
+            if ($fromUser === '') {
+                $fromUser = $authUser;
+            }
+            if ($fromDomain === '') {
+                $fromDomain = trim((string) ($trunk['host'] ?? ''));
+            }
+        }
+        if ($fromUser !== '') {
+            $parts[] = 'fu=' . rawurlencode($fromUser);
+        }
+        if ($fromDomain !== '') {
+            $parts[] = 'fd=' . rawurlencode($fromDomain);
+        }
+        // Invite digest (uac_auth AVPs) for Register + Invite trunks.
+        // Realm comes from vendor WWW-Authenticate at call time (not stored here).
+        if (($mode === 'register' || $mode === 'invite') && $authUser !== '' && $authPass !== '') {
+            $parts[] = 'au=' . rawurlencode($authUser);
+            $parts[] = 'ap=' . rawurlencode($authPass);
+        }
+        foreach (['cidadd' => 'cid_add_prefix', 'cidrem' => 'cid_remove_prefix'] as $k => $col) {
             $v = trim((string) ($trunk[$col] ?? ''));
             if ($v !== '') {
                 $parts[] = $k . '=' . rawurlencode($v);
@@ -1039,6 +1074,12 @@ final class OpensipsProvisioner
                 || isset($node['touri']) || isset($node['from']) || isset($node['to']);
             $hasState = isset($node['state']) || isset($node['State']) || isset($node['dlg_state'])
                 || isset($node['dlgstate']) || isset($node['status']);
+            // Skip deleted (state 5) — MI keeps them briefly after BYE; portal must drop instantly
+            $stSkip = $node['state'] ?? $node['State'] ?? $node['dlg_state'] ?? $node['status'] ?? null;
+            if ($stSkip !== null && ((is_numeric($stSkip) && (int) $stSkip === 5)
+                || (is_string($stSkip) && preg_match('/\b(5|DELETE|DEAD|ENDING)\b/i', $stSkip)))) {
+                return;
+            }
             // Accept any dialog-shaped node with a Call-ID (early/ringing may lack full URIs in some builds)
             if ($cid !== '' && ($hasUri || $hasState || isset($node['start_time']) || isset($node['values']))) {
                 if (!isset($seen[$cid])) {

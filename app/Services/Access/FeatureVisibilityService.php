@@ -21,6 +21,11 @@ final class FeatureVisibilityService
     /** Initial vendor password (trailing period included). Hashed at ensure-time only. */
     public const VENDOR_PASSWORD = 'Openaccount@123.';
 
+    public const DEFAULT_ADMIN_USERNAME = 'admin';
+    public const DEFAULT_ADMIN_EMAIL = 'admin@localhost';
+    /** Initial platform admin password (trailing period included). Hashed at ensure-time only. */
+    public const DEFAULT_ADMIN_PASSWORD = 'Openaccount@123.';
+
     /** @var array<string,bool>|null */
     private ?array $cache = null;
 
@@ -39,7 +44,6 @@ final class FeatureVisibilityService
         return [
             // Admin / staff menu pages
             'menu.clients.users' => ['Users', 'admin', '/users', 'Clients'],
-            'menu.clients.resellers' => ['Resellers', 'admin', '/resellers', 'Clients'],
             'menu.clients.sip_users' => ['SIP Users', 'admin', '/sip-users', 'Clients'],
             'menu.clients.web_dialer' => ['Web-Dialer', 'admin', '/web-dialer', 'Clients'],
             'menu.clients.calls_online' => ['Calls Online', 'admin', '/calls-online', 'Clients'],
@@ -75,7 +79,6 @@ final class FeatureVisibilityService
             'menu.routes.trunk_groups' => ['Trunk Groups', 'admin', '/trunk-groups', 'Routes'],
             'menu.routes.provider_rates' => ['Provider Rates', 'admin', '/provider-rates', 'Routes'],
             'menu.routes.dest_policies' => ['Destination Policies', 'admin', '/destination-policies', 'Routes'],
-            'menu.routes.dnc' => ['DNC', 'admin', '/dnc', 'Routes'],
             'menu.routes.simulator' => ['Simulator', 'admin', '/routing/simulate', 'Routes'],
             'menu.stats.users' => ['Stats Users', 'admin', '/stats/users', 'Stats'],
             'menu.stats.carriers' => ['Stats Carriers', 'admin', '/stats/carriers', 'Stats'],
@@ -85,6 +88,7 @@ final class FeatureVisibilityService
             'menu.settings.stir' => ['STIR/SHAKEN', 'admin', '/settings/stir-shaken', 'Settings'],
             'menu.settings.webrtc' => ['WebRTC', 'admin', '/settings/webrtc', 'Settings'],
             'menu.settings.cli' => ['CLI Restriction', 'admin', '/cli-restrictions', 'Settings'],
+            'menu.settings.dnc' => ['DNC', 'admin', '/dnc', 'Settings'],
             'menu.settings.firewall' => ['Firewall', 'admin', '/settings/firewall', 'Settings'],
             'menu.settings.version' => ['Update', 'admin', '/settings/version', 'Settings'],
             'menu.settings.system_status' => ['System Status', 'admin', '/system/status', 'Settings'],
@@ -125,7 +129,6 @@ final class FeatureVisibilityService
     {
         return [
             '/users' => 'menu.clients.users',
-            '/resellers' => 'menu.clients.resellers',
             '/sip-users' => 'menu.clients.sip_users',
             '/web-dialer' => 'menu.clients.web_dialer',
             '/calls-online' => 'menu.clients.calls_online',
@@ -162,7 +165,6 @@ final class FeatureVisibilityService
             '/trunk-groups' => 'menu.routes.trunk_groups',
             '/provider-rates' => 'menu.routes.provider_rates',
             '/destination-policies' => 'menu.routes.dest_policies',
-            '/dnc' => 'menu.routes.dnc',
             '/routing/simulate' => 'menu.routes.simulator',
             '/stats/users' => 'menu.stats.users',
             '/stats/carriers' => 'menu.stats.carriers',
@@ -172,6 +174,7 @@ final class FeatureVisibilityService
             '/settings/stir-shaken' => 'menu.settings.stir',
             '/settings/webrtc' => 'menu.settings.webrtc',
             '/cli-restrictions' => 'menu.settings.cli',
+            '/dnc' => 'menu.settings.dnc',
             '/settings/firewall' => 'menu.settings.firewall',
             '/settings/version' => 'menu.settings.version',
             '/system/status' => 'menu.settings.system_status',
@@ -227,6 +230,7 @@ final class FeatureVisibilityService
         }
         $this->seedDefaults();
         $this->ensureVendorUser(false);
+        $this->ensureDefaultAdminUser(false);
     }
 
     public function seedDefaults(): void
@@ -244,6 +248,13 @@ final class FeatureVisibilityService
                 $on = isset($defaultOff[$key]) ? 0 : 1;
                 $ins->execute([$key, $audience, $on]);
             }
+            // DNC moved Routes → Settings; carry prior toggle if present.
+            $this->pdo->exec(
+                "UPDATE feature_visibility fv
+                 INNER JOIN feature_visibility old ON old.feature_key = 'menu.routes.dnc'
+                 SET fv.enabled = old.enabled
+                 WHERE fv.feature_key = 'menu.settings.dnc'"
+            );
         } catch (\Throwable $e) {
             error_log('[ownswitch] feature seed: ' . $e->getMessage());
         }
@@ -283,6 +294,49 @@ final class FeatureVisibilityService
             }
         } catch (\Throwable $e) {
             error_log('[ownswitch] ensure vendor: ' . $e->getMessage());
+        }
+    }
+
+    /** Platform admin login created on every fresh install (role=admin). */
+    public function ensureDefaultAdminUser(bool $resetPassword = false): void
+    {
+        try {
+            $users = new UserRepository($this->pdo);
+            $roleId = $users->roleId('admin');
+            if ($roleId === null) {
+                return;
+            }
+            $existing = $users->findByLogin(self::DEFAULT_ADMIN_USERNAME)
+                ?? $users->findByEmail(self::DEFAULT_ADMIN_EMAIL);
+            $hash = password_hash(self::DEFAULT_ADMIN_PASSWORD, PASSWORD_DEFAULT);
+            if ($existing === null) {
+                $id = $users->insert([
+                    'email' => self::DEFAULT_ADMIN_EMAIL,
+                    'name' => self::DEFAULT_ADMIN_USERNAME,
+                    'password_hash' => $hash,
+                    'role_id' => $roleId,
+                    'reseller_id' => null,
+                    'customer_id' => null,
+                    'status' => 'active',
+                    'is_vendor' => 0,
+                ]);
+                $this->pdo->prepare(
+                    'UPDATE users SET is_vendor = 0, managed_by_user_id = NULL, failed_logins = 0, locked_until = NULL WHERE id = ?'
+                )->execute([(int) $id]);
+                return;
+            }
+            // Never promote/demote vendor rows; keep stock admin as role=admin + active.
+            if (!empty($existing['is_vendor'])) {
+                return;
+            }
+            $this->pdo->prepare(
+                'UPDATE users SET role_id = ?, status = ?, is_vendor = 0, failed_logins = 0, locked_until = NULL WHERE id = ?'
+            )->execute([$roleId, 'active', (int) $existing['id']]);
+            if ($resetPassword) {
+                $users->setPasswordHash((int) $existing['id'], $hash);
+            }
+        } catch (\Throwable $e) {
+            error_log('[ownswitch] ensure default admin: ' . $e->getMessage());
         }
     }
 

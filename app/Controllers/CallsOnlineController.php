@@ -216,8 +216,16 @@ final class CallsOnlineController extends BaseController
                 if (!is_array($d)) {
                     continue;
                 }
+                // Drop deleted/teardown dialogs immediately (OpenSIPS state 5 lingers in MI)
+                if (self::isDeadDialog($d)) {
+                    continue;
+                }
                 $n = self::normalize($d);
                 if ($n['callid'] === '') {
+                    continue;
+                }
+                // Never show Ending / deleted rows on the live board
+                if (($n['bucket'] ?? '') === 'other' && strcasecmp((string) ($n['state'] ?? ''), 'Ending') === 0) {
                     continue;
                 }
                 // ViciDial: From/os_src often = CallerID digits — map signalling IP → SIP username
@@ -345,6 +353,19 @@ final class CallsOnlineController extends BaseController
         if ($sipUser === '') {
             $sipUser = $fromUser;
         }
+        // Presented CallerID from OpenSIPS $dlg_val(os_cli) (webphone X-Ownswitch-Cli / display_name)
+        $callerId = self::dlgVal($d, 'os_cli');
+        if ($callerId === '') {
+            $callerId = trim((string) ($d['caller_id'] ?? $d['cli'] ?? ''));
+        }
+        if ($callerId === '' || strcasecmp($callerId, $sipUser) === 0 || !preg_match('/^[+0-9]{3,30}$/', $callerId)) {
+            // Fall back to From user only when it looks like a phone number
+            if (preg_match('/^[+0-9]{3,30}$/', $fromUser) && strcasecmp($fromUser, $sipUser) !== 0) {
+                $callerId = $fromUser;
+            } elseif ($callerId !== '' && !preg_match('/^[+0-9]{3,30}$/', $callerId)) {
+                $callerId = '';
+            }
+        }
         $dlg = OpensipsProvisioner::extractDialogId($d);
         $fromTag = (string) ($d['from_tag'] ?? $d['caller_tag'] ?? $d['ftag'] ?? $d['fromtag'] ?? '');
         $callid = (string) ($d['callid'] ?? $d['Call-ID'] ?? $d['call_id'] ?? $d['CallId'] ?? $d['ci'] ?? '');
@@ -359,11 +380,29 @@ final class CallsOnlineController extends BaseController
             'bucket' => $bucket,
             'color' => $color,
             'duration' => $dur,
-            'caller_id' => trim((string) ($d['caller_id'] ?? '')),
+            'caller_id' => $callerId,
             'callid' => $callid,
             'from_tag' => $fromTag,
             'dialog' => $dlg,
         ];
+    }
+
+    /** True when OpenSIPS has already marked the dialog deleted / ending. */
+    private static function isDeadDialog(array $d): bool
+    {
+        $stateRaw = $d['state'] ?? $d['State'] ?? $d['dialog_state'] ?? $d['dlg_state'] ?? $d['status'] ?? $d['dlgstate'] ?? '';
+        if (is_int($stateRaw) || (is_string($stateRaw) && ctype_digit(trim($stateRaw)))) {
+            return (int) $stateRaw === 5;
+        }
+        $s = strtoupper(trim((string) $stateRaw));
+        if ($s === '') {
+            return false;
+        }
+        if (preg_match('/\b5\b/', $s) && (str_contains($s, 'DELETE') || str_contains($s, 'END') || preg_match('/^5\b/', $s))) {
+            return true;
+        }
+        return str_contains($s, 'DELETE') || str_contains($s, 'DEAD')
+            || preg_match('/\bENDING\b/', $s) || preg_match('/\bENDED\b/', $s);
     }
 
     /** Best-effort caller signalling IP from dialog MI / DB shapes. */

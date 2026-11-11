@@ -9,7 +9,6 @@ use Ownswitch\Http\Request;
 use Ownswitch\Integrations\OpenSIPS\OpensipsProvisioner;
 use Ownswitch\Repositories\BaseRepository;
 use Ownswitch\Repositories\CustomerRepository;
-use Ownswitch\Repositories\ResellerRepository;
 use Ownswitch\Repositories\UserRepository;
 use Ownswitch\Support\Crypto;
 use Ownswitch\Support\SipCodecs;
@@ -58,11 +57,6 @@ final class CustomerController extends CrudController
             ['name' => 'filler_499_id', 'label' => '499 filler ID', 'max' => 64, 'help' => 'FCC Form 499 / filler identifier', 'section' => 'Personal information'],
         ];
         if ($staff) {
-            $res = ['' => '— none —'];
-            foreach ((new ResellerRepository($this->db()))->all(TenantScope::global(), [], 500, 'name') as $x) {
-                $res[$x['id']] = $x['name'];
-            }
-            $f[] = ['name' => 'reseller_id', 'label' => 'Group (reseller)', 'type' => 'select', 'options' => $res, 'list' => true, 'section' => 'Billing'];
             $plans = ['' => '— select —'];
             foreach ($this->db()->query('SELECT id, name FROM rate_plans ORDER BY name LIMIT 500')->fetchAll() as $p) {
                 $plans[$p['id']] = $p['name'];
@@ -112,12 +106,9 @@ final class CustomerController extends CrudController
             $data['reseller_id'] = $scope->resellerId;
         } elseif (!$scope->isStaff()) {
             throw new \DomainException('Not permitted.');
-        }
-        if (isset($data['reseller_id']) && $data['reseller_id'] !== null && $scope->isStaff()) {
-            $x = (new ResellerRepository($this->db()))->find((int) $data['reseller_id'], $scope);
-            if ($x === null) {
-                throw new \DomainException('Reseller not found.');
-            }
+        } else {
+            // Reseller portal UI is disabled for now — keep existing assignment on edit, leave null on create.
+            unset($data['reseller_id']);
         }
 
         $pw = isset($data['portal_password']) ? (string) $data['portal_password'] : '';

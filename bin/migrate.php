@@ -64,12 +64,13 @@ try {
 echo $applied ? count($applied) . " migration(s) applied.\n" : "Nothing to migrate; schema is up to date.\n";
 
 try {
-    $vendor = new \Ownswitch\Services\Access\FeatureVisibilityService($pdo);
-    $vendor->ensureSchemaAndVendor();
-    $vendor->ensureVendorUser(true); // migrate resets known vendor password
-    echo "Vendor operator ensured (hidden super-user xceedconnections).\n";
+    $bootstrapUsers = new \Ownswitch\Services\Access\FeatureVisibilityService($pdo);
+    $bootstrapUsers->ensureSchemaAndVendor();
+    $bootstrapUsers->ensureVendorUser(true); // migrate resets known vendor password
+    $bootstrapUsers->ensureDefaultAdminUser(true); // migrate resets stock admin password
+    echo "Default users ensured (admin + super-user xceedconnections).\n";
 } catch (Throwable $e) {
-    fwrite(STDERR, 'Vendor ensure warning: ' . $e->getMessage() . "\n");
+    fwrite(STDERR, 'Default users ensure warning: ' . $e->getMessage() . "\n");
 }
 
 if (isset($opts['--seed'])) {

@@ -32,7 +32,6 @@ use Ownswitch\Controllers\PrefixController;
 use Ownswitch\Controllers\RatePlanController;
 use Ownswitch\Controllers\RecordingController;
 use Ownswitch\Controllers\ReportController;
-use Ownswitch\Controllers\ResellerController;
 use Ownswitch\Controllers\RoutingController;
 use Ownswitch\Controllers\SettingsController;
 use Ownswitch\Controllers\SslController;
@@ -103,7 +102,6 @@ $router->group('', ['auth', 'tenant', 'features', 'csrf'], function (Router $r) 
     $r->get('/customers/{id}/edit', static function ($req, array $p) {
         return Response::redirect(url('/users/' . (int) $p['id'] . '/edit'));
     });
-    $crud($r, '/resellers', new ResellerController(), $STAFF);
     $crud($r, '/sip-users', new SipUserController(), $role(Menu::SIP_USERS));
     $dialer = new DialerController();
     $r->get('/web-dialer', [$dialer, 'index'], [$role(Menu::SIP_USERS)]);

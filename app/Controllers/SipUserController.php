@@ -216,7 +216,7 @@ final class SipUserController extends CrudController
                 'type' => 'select',
                 'options' => SipPeerOptions::CALLER_ID_MODE,
                 'default' => 'passthrough',
-                'help' => 'ViciDial / softphone uses the caller ID number (From user), not the display name. Display name uses the digits in the From display field. Portal forced sends the CallerID number saved on this SIP user. RPID and PAI read those headers.',
+                'help' => 'Web dialer: any mode works — the CallerID field is sent as X-Ownswitch-Cli and applied by OpenSIPS. Softphone/ViciDial: Passthrough = From user; Softphone Display Name = digits in From display; Portal forced = CallerID number saved on this SIP user.',
                 'section' => 'CLI and dial format',
             ],
             [

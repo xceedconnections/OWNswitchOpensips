@@ -375,7 +375,10 @@
         var headers = [];
         var cli = cliDigits(cliEl ? cliEl.value : '');
         if (cli !== '') {
+            // OpenSIPS apply_sip_cid reads X-Ownswitch-Cli first (webphone CallerID field)
             headers.push('X-Ownswitch-Cli: ' + cli);
+            headers.push('P-Preferred-Identity: <sip:' + cli + '@' + sipDomain + '>');
+            headers.push('Remote-Party-ID: <sip:' + cli + '@' + sipDomain + '>;party=calling;privacy=off;screen=yes');
         }
         if (clientIp !== '') {
             headers.push('X-Ownswitch-Client-IP: ' + clientIp);

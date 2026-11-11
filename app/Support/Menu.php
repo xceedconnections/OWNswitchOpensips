@@ -30,7 +30,6 @@ final class Menu
         $sections = [
             ['Clients', [
                 ['Users', '/users', self::RESELLER_UP],
-                ['Resellers', '/resellers', self::STAFF],
                 ['SIP Users', '/sip-users', self::SIP_USERS],
                 ['Web-Dialer', '/web-dialer', self::SIP_USERS],
                 ['Calls Online', '/calls-online', self::SIP_USERS],
@@ -87,7 +86,6 @@ final class Menu
                 ['Trunk Groups', '/trunk-groups', self::STAFF],
                 ['Provider Rates', '/provider-rates', self::STAFF],
                 ['Destination Policies', '/destination-policies', self::STAFF],
-                ['DNC', '/dnc', self::STAFF],
                 ['Simulator', '/routing/simulate', self::STAFF],
             ]],
             ['Stats', [
@@ -101,6 +99,7 @@ final class Menu
                 ['STIR/SHAKEN', '/settings/stir-shaken', self::STAFF],
                 ['WebRTC', '/settings/webrtc', self::STAFF],
                 ['CLI Restriction', '/cli-restrictions', self::STAFF],
+                ['DNC', '/dnc', self::STAFF],
                 ['Firewall', '/settings/firewall', self::STAFF],
                 ['Update', '/settings/version', self::STAFF],
                 ['System Status', '/system/status', self::STAFF],

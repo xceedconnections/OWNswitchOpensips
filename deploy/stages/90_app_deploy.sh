@@ -223,6 +223,12 @@ find "$release" -mindepth 1 -maxdepth 1 ! -name public ! -name storage -exec chm
 if [[ -d "$release/public" ]]; then
   chmod -R u=rwX,go=rX "$release/public"
 fi
+# OpenSIPS exec helpers (dial-cap / CLI restrict) — opensips user is in group ownswitch
+if [[ -d "$release/bin" ]]; then
+  chmod 0750 "$release/bin" 2>/dev/null || true
+  chmod 0640 "$release/bin/"*.php 2>/dev/null || true
+  usermod -aG ownswitch opensips 2>/dev/null || true
+fi
 ln -sfn "${OWN_VAR}/storage" "$release/storage"
 install -d -m 0750 -o ownswitch -g ownswitch "${OWN_VAR}/storage/cache" "${OWN_VAR}/storage/uploads"
 

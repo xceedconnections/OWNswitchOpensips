@@ -18,12 +18,14 @@ final class UserAccessController extends BaseController
             return $deny;
         }
         $user = $this->user($r);
+        $asVendor = FeatureVisibilityService::isVendorUser($user);
         $svc = new UserAccessService($this->db());
         $svc->ensureSchema();
         return $this->view('settings/user_access/index', [
             'title' => 'User Access',
-            'users' => $svc->listManagedBy((int) $user['id']),
+            'users' => $svc->listManagedBy((int) $user['id'], $asVendor),
             'canWrite' => $this->canWrite($r),
+            'asVendor' => $asVendor,
         ]);
     }
 
@@ -48,6 +50,8 @@ final class UserAccessController extends BaseController
                 'password' => '',
             ],
             'featureGroups' => $this->featureGroups($manager, []),
+            'asVendor' => FeatureVisibilityService::isVendorUser($manager),
+            'showFeatureGrants' => true,
         ]);
     }
 
@@ -77,6 +81,8 @@ final class UserAccessController extends BaseController
                 'errors' => ['_form' => $result['error']],
                 'data' => $data,
                 'featureGroups' => $this->featureGroups($manager, $data['features']),
+                'asVendor' => FeatureVisibilityService::isVendorUser($manager),
+                'showFeatureGrants' => true,
             ], 422);
         }
         $this->audit($r, 'create', 'user_access', $result['id'], null, [
@@ -92,14 +98,16 @@ final class UserAccessController extends BaseController
             return $deny;
         }
         $manager = $this->user($r);
+        $asVendor = FeatureVisibilityService::isVendorUser($manager);
         $svc = new UserAccessService($this->db());
-        $existing = $svc->findManaged((int) $p['id'], (int) $manager['id']);
+        $existing = $svc->findManaged((int) $p['id'], (int) $manager['id'], $asVendor);
         if ($existing === null) {
             return $this->notFound();
         }
-        $grants = array_keys(array_filter($svc->grantsFor((int) $existing['id'])));
+        $isManaged = (int) ($existing['managed_by_user_id'] ?? 0) > 0;
+        $grants = $isManaged ? array_keys(array_filter($svc->grantsFor((int) $existing['id']))) : [];
         return $this->view('settings/user_access/form', [
-            'title' => 'Edit sub-admin',
+            'title' => $isManaged ? 'Edit sub-admin' : 'Edit admin',
             'existing' => $existing,
             'errors' => [],
             'data' => [
@@ -108,8 +116,11 @@ final class UserAccessController extends BaseController
                 'status' => (string) $existing['status'],
                 'password' => '',
             ],
-            'featureGroups' => $this->featureGroups($manager, $grants),
+            'featureGroups' => $isManaged ? $this->featureGroups($manager, $grants) : [],
             'canWrite' => $this->canWrite($r),
+            'asVendor' => $asVendor,
+            'showFeatureGrants' => $isManaged,
+            'canDelete' => $isManaged,
         ]);
     }
 
@@ -122,12 +133,14 @@ final class UserAccessController extends BaseController
             return $this->forbidden();
         }
         $manager = $this->user($r);
+        $asVendor = FeatureVisibilityService::isVendorUser($manager);
         $svc = new UserAccessService($this->db());
         $id = (int) $p['id'];
-        $existing = $svc->findManaged($id, (int) $manager['id']);
+        $existing = $svc->findManaged($id, (int) $manager['id'], $asVendor);
         if ($existing === null) {
             return $this->notFound();
         }
+        $isManaged = (int) ($existing['managed_by_user_id'] ?? 0) > 0;
         $data = $this->formData($r);
         $result = $svc->updateSubAdmin(
             $manager,
@@ -136,16 +149,20 @@ final class UserAccessController extends BaseController
             $data['name'],
             $data['password'] !== '' ? $data['password'] : null,
             $data['status'],
-            $data['features']
+            $data['features'],
+            $asVendor
         );
         if (!$result['ok']) {
             return $this->view('settings/user_access/form', [
-                'title' => 'Edit sub-admin',
+                'title' => $isManaged ? 'Edit sub-admin' : 'Edit admin',
                 'existing' => $existing,
                 'errors' => ['_form' => $result['error']],
                 'data' => $data,
-                'featureGroups' => $this->featureGroups($manager, $data['features']),
+                'featureGroups' => $isManaged ? $this->featureGroups($manager, $data['features']) : [],
                 'canWrite' => true,
+                'asVendor' => $asVendor,
+                'showFeatureGrants' => $isManaged,
+                'canDelete' => $isManaged,
             ], 422);
         }
         $this->audit($r, 'update', 'user_access', $id, [
@@ -154,7 +171,7 @@ final class UserAccessController extends BaseController
             'email' => $data['email'],
             'features' => count($data['features']),
         ]);
-        return $this->redirect($r, '/settings/user-access/' . $id . '/edit', 'Sub-admin saved.');
+        return $this->redirect($r, '/settings/user-access/' . $id . '/edit', 'Admin profile saved.');
     }
 
     public function destroy(Request $r, array $p): Response
@@ -166,13 +183,16 @@ final class UserAccessController extends BaseController
             return $this->forbidden();
         }
         $manager = $this->user($r);
+        $asVendor = FeatureVisibilityService::isVendorUser($manager);
         $svc = new UserAccessService($this->db());
         $id = (int) $p['id'];
-        $existing = $svc->findManaged($id, (int) $manager['id']);
+        $existing = $svc->findManaged($id, (int) $manager['id'], $asVendor);
         if ($existing === null) {
             return $this->notFound();
         }
-        $svc->deleteSubAdmin($id, (int) $manager['id']);
+        if (!$svc->deleteSubAdmin($id, (int) $manager['id'], $asVendor)) {
+            return $this->redirect($r, '/settings/user-access/' . $id . '/edit', 'This admin cannot be deleted from User Access.');
+        }
         $this->audit($r, 'delete', 'user_access', $id, ['email' => $existing['email']], null);
         return $this->redirect($r, '/settings/user-access', 'Sub-admin deleted.');
     }

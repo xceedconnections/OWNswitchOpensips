@@ -11,7 +11,7 @@ use Ownswitch\Services\Tariffs\ImportUploadStore;
 use Ownswitch\Support\Destination;
 use Ownswitch\Support\SpreadsheetReader;
 
-/** Routes → DNC: groups, numbers, CSV/XLSX add/delete. */
+/** Settings → DNC: groups, numbers, CSV/XLSX add/delete. */
 final class DncController extends BaseController
 {
     private function svc(): DncService

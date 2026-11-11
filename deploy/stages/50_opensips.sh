@@ -90,7 +90,7 @@ HAVE_MI_HTTP=0
 HAVE_NATHELPER=0
 [[ -f "${OPENSIPS_MPATH}nathelper.so" ]] && HAVE_NATHELPER=1
 HAVE_UAC=0
-[[ -f "${OPENSIPS_MPATH}uac_registrant.so" ]] && [[ -f "${OPENSIPS_MPATH}uac_auth.so" ]] && HAVE_UAC=1
+[[ -f "${OPENSIPS_MPATH}uac_registrant.so" ]] && [[ -f "${OPENSIPS_MPATH}uac_auth.so" ]] && [[ -f "${OPENSIPS_MPATH}uac.so" ]] && HAVE_UAC=1
 HAVE_ALIAS_DB=0
 [[ -f "${OPENSIPS_MPATH}alias_db.so" ]] && HAVE_ALIAS_DB=1
 HAVE_EXEC=0
@@ -180,6 +180,16 @@ ensure_column subscriber dst_format 'dst_format VARCHAR(32) DEFAULT NULL'
 ensure_column subscriber dnc_group_id 'dnc_group_id INT DEFAULT NULL'
 ensure_column acc talk 'talk INT UNSIGNED DEFAULT NULL'
 ensure_column missed_calls talk 'talk INT UNSIGNED DEFAULT NULL'
+# ACC extra_fields (src/dst/ip/cli/gw) — without these, CDR insert fails and reports stay empty
+for _acc_tbl in acc missed_calls; do
+  ensure_column "${_acc_tbl}" src_user 'src_user VARCHAR(64) NULL'
+  ensure_column "${_acc_tbl}" dst_user 'dst_user VARCHAR(64) NULL'
+  ensure_column "${_acc_tbl}" src_ip 'src_ip VARCHAR(45) NULL'
+  ensure_column "${_acc_tbl}" cli 'cli VARCHAR(64) NULL'
+  ensure_column "${_acc_tbl}" gw 'gw VARCHAR(64) NULL'
+done
+# Eyebeam / WebRTC Call-IDs often exceed CHAR(64)
+mysql_root "${DB_OPENSIPS}" -e "ALTER TABLE acc MODIFY callid VARCHAR(128) NOT NULL DEFAULT ''; ALTER TABLE missed_calls MODIFY callid VARCHAR(128) NOT NULL DEFAULT '';" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 5. Runtime dirs + placeholders for opensips.cfg.tpl
@@ -250,8 +260,14 @@ fi
 if (( HAVE_UAC )); then
   # OpenSIPS 3.6: uac_registrant depends on uac_auth (not legacy uac.so alone).
   # timer_interval default is 100s (slow first REGISTER); keep >= hash buckets (2^hash_size).
+  # uac_auth.so = AVP-based digest API; uac.so exports script function uac_auth()
+  # (this OpenSIPS 3.6 package has no uac_auth "credential" modparam — use AVPs from trunk attrs)
   export OPENSIPS_UAC_BLOCK='
 loadmodule "uac_auth.so"
+modparam("uac_auth", "auth_username_avp", "$avp(auth_username)")
+modparam("uac_auth", "auth_password_avp", "$avp(auth_password)")
+modparam("uac_auth", "auth_realm_avp", "$avp(auth_realm)")
+loadmodule "uac.so"
 loadmodule "uac_registrant.so"
 modparam("uac_registrant", "db_url", "'"${OPENSIPS_DB_URL}"'")
 modparam("uac_registrant", "hash_size", 1)
@@ -419,7 +435,7 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
 		$var(cap_user) = $fU;
 	}
-	if (!exec("'"${_cap_php}"' '"${_cap_script}"' $var(cap_user) $rU $var(tid)")) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cap_script}"' $var(cap_user) $rU $var(tid)")) {
 		xlog("L_WARN", "Rate Cap Exceeded user=$var(cap_user) dst=$rU trunk=$var(tid)\n");
 		if ($var(cap_tries) == NULL) {
 			$var(cap_tries) = 0;
@@ -433,6 +449,10 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 		exit;
 	}
 }'
+    # opensips runs as user opensips — release tree is root:ownswitch (g=rX)
+    usermod -aG ownswitch opensips 2>/dev/null || true
+    chmod 755 "$(dirname "${_cap_script}")" 2>/dev/null || true
+    chmod 644 "${_cap_script}" 2>/dev/null || true
     log_info "Rate CAP: exec → ${_cap_script}"
   else
     export OPENSIPS_RATE_CAP_ROUTE='route[check_rate_cap] {
@@ -447,6 +467,7 @@ if [[ -z "${OPENSIPS_CLI_RESTRICT_ROUTE:-}" ]]; then
   _cli_script="/opt/ownswitch/current/bin/cli-restrict-check.php"
   [[ -f "${_cli_script}" ]] || _cli_script="/opt/ownswitch-src/bin/cli-restrict-check.php"
   if (( HAVE_EXEC )) && [[ -f "${_cli_script}" ]]; then
+    chmod 644 "${_cli_script}" 2>/dev/null || true
     export OPENSIPS_CLI_RESTRICT_ROUTE='route[check_cli_restriction] {
 	$var(cli_user) = $au;
 	if ($var(cli_user) == NULL || $(var(cli_user){s.len}) == 0) {
@@ -462,7 +483,7 @@ if [[ -z "${OPENSIPS_CLI_RESTRICT_ROUTE:-}" ]]; then
 	if ($var(cli_digits) == NULL || $(var(cli_digits){s.len}) < 3) {
 		return;
 	}
-	if (!exec("'"${_cap_php}"' '"${_cli_script}"' $var(cli_user) $var(cli_digits)")) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cli_script}"' $var(cli_user) $var(cli_digits)")) {
 		xlog("L_WARN", "CLI restricted user=$var(cli_user) cli=$var(cli_digits)\n");
 		acc_db_request("403 CLI restricted", "acc");
 		send_reply(403, "CLI restricted");

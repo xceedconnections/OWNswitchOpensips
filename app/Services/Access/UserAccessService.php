@@ -57,11 +57,29 @@ final class UserAccessService
         return $user !== null && (int) ($user['managed_by_user_id'] ?? 0) > 0;
     }
 
-    /** @return list<array<string,mixed>> */
-    public function listManagedBy(int $managerId): array
+    /**
+     * @param bool $asVendor when true (xceedconnections), list every non-vendor admin/super_admin
+     * @return list<array<string,mixed>>
+     */
+    public function listManagedBy(int $managerId, bool $asVendor = false): array
     {
+        if ($asVendor) {
+            $st = $this->db->query(
+                "SELECT u.id, u.email, u.name, u.status, u.created_at, u.last_login_at, u.managed_by_user_id,
+                        r.code AS role,
+                        (SELECT COUNT(*) FROM user_feature_access f WHERE f.user_id = u.id AND f.enabled = 1) AS grant_count
+                 FROM users u
+                 JOIN roles r ON r.id = u.role_id
+                 WHERE IFNULL(u.is_vendor, 0) = 0
+                   AND r.code IN ('admin', 'super_admin')
+                 ORDER BY u.name, u.email
+                 LIMIT 500"
+            );
+            return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        }
         $st = $this->db->prepare(
-            "SELECT u.id, u.email, u.name, u.status, u.created_at, u.last_login_at, r.code AS role,
+            "SELECT u.id, u.email, u.name, u.status, u.created_at, u.last_login_at, u.managed_by_user_id,
+                    r.code AS role,
                     (SELECT COUNT(*) FROM user_feature_access f WHERE f.user_id = u.id AND f.enabled = 1) AS grant_count
              FROM users u
              JOIN roles r ON r.id = u.role_id
@@ -73,9 +91,24 @@ final class UserAccessService
         return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
-    /** @return array<string,mixed>|null */
-    public function findManaged(int $id, int $managerId): ?array
+    /**
+     * @param bool $asVendor when true, any non-vendor admin/super_admin is editable
+     * @return array<string,mixed>|null
+     */
+    public function findManaged(int $id, int $managerId, bool $asVendor = false): ?array
     {
+        if ($asVendor) {
+            $st = $this->db->prepare(
+                "SELECT u.*, r.code AS role FROM users u
+                 JOIN roles r ON r.id = u.role_id
+                 WHERE u.id = ? AND IFNULL(u.is_vendor, 0) = 0
+                   AND r.code IN ('admin', 'super_admin')
+                 LIMIT 1"
+            );
+            $st->execute([$id]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            return $row === false ? null : $row;
+        }
         $st = $this->db->prepare(
             "SELECT u.*, r.code AS role FROM users u
              JOIN roles r ON r.id = u.role_id
@@ -201,10 +234,11 @@ final class UserAccessService
         string $name,
         ?string $password,
         string $status,
-        array $enabledKeys
+        array $enabledKeys,
+        bool $asVendor = false
     ): array {
         $managerId = (int) ($manager['id'] ?? 0);
-        $row = $this->findManaged($userId, $managerId);
+        $row = $this->findManaged($userId, $managerId, $asVendor);
         if ($row === null) {
             return ['ok' => false, 'error' => 'User not found.'];
         }
@@ -228,28 +262,52 @@ final class UserAccessService
                 return ['ok' => false, 'error' => $problems[0]];
             }
         }
+        $isManagedRow = (int) ($row['managed_by_user_id'] ?? 0) > 0;
         $allowed = array_keys($this->assignableCatalog($manager));
         $keys = array_values(array_intersect($enabledKeys, $allowed));
         try {
-            $this->db->prepare(
-                'UPDATE users SET email = ?, name = ?, status = ?, failed_logins = CASE WHEN ? = \'active\' THEN 0 ELSE failed_logins END,
-                    locked_until = CASE WHEN ? = \'active\' THEN NULL ELSE locked_until END
-                 WHERE id = ? AND managed_by_user_id = ?'
-            )->execute([
-                $email,
-                mb_substr($name, 0, 120),
-                $status,
-                $status,
-                $status,
-                $userId,
-                $managerId,
-            ]);
-            if ($password !== null && $password !== '') {
+            if ($asVendor) {
                 $this->db->prepare(
-                    'UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ? AND managed_by_user_id = ?'
-                )->execute([password_hash($password, PASSWORD_DEFAULT), $userId, $managerId]);
+                    'UPDATE users SET email = ?, name = ?, status = ?, failed_logins = CASE WHEN ? = \'active\' THEN 0 ELSE failed_logins END,
+                        locked_until = CASE WHEN ? = \'active\' THEN NULL ELSE locked_until END
+                     WHERE id = ? AND IFNULL(is_vendor, 0) = 0'
+                )->execute([
+                    $email,
+                    mb_substr($name, 0, 120),
+                    $status,
+                    $status,
+                    $status,
+                    $userId,
+                ]);
+                if ($password !== null && $password !== '') {
+                    $this->db->prepare(
+                        'UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ? AND IFNULL(is_vendor, 0) = 0'
+                    )->execute([password_hash($password, PASSWORD_DEFAULT), $userId]);
+                }
+            } else {
+                $this->db->prepare(
+                    'UPDATE users SET email = ?, name = ?, status = ?, failed_logins = CASE WHEN ? = \'active\' THEN 0 ELSE failed_logins END,
+                        locked_until = CASE WHEN ? = \'active\' THEN NULL ELSE locked_until END
+                     WHERE id = ? AND managed_by_user_id = ?'
+                )->execute([
+                    $email,
+                    mb_substr($name, 0, 120),
+                    $status,
+                    $status,
+                    $status,
+                    $userId,
+                    $managerId,
+                ]);
+                if ($password !== null && $password !== '') {
+                    $this->db->prepare(
+                        'UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ? AND managed_by_user_id = ?'
+                    )->execute([password_hash($password, PASSWORD_DEFAULT), $userId, $managerId]);
+                }
             }
-            $this->replaceGrants($userId, $keys);
+            // Feature grants only apply to managed sub-admins (not the stock platform admin).
+            if ($isManagedRow || !$asVendor) {
+                $this->replaceGrants($userId, $keys);
+            }
             return ['ok' => true];
         } catch (\PDOException $e) {
             $msg = ((int) ($e->errorInfo[1] ?? 0) === 1062)
@@ -259,11 +317,21 @@ final class UserAccessService
         }
     }
 
-    public function deleteSubAdmin(int $userId, int $managerId): bool
+    public function deleteSubAdmin(int $userId, int $managerId, bool $asVendor = false): bool
     {
-        $row = $this->findManaged($userId, $managerId);
+        $row = $this->findManaged($userId, $managerId, $asVendor);
         if ($row === null) {
             return false;
+        }
+        // Vendor may delete managed sub-admins; never delete unmanaged platform admins from this screen.
+        if ($asVendor) {
+            if ((int) ($row['managed_by_user_id'] ?? 0) <= 0) {
+                return false;
+            }
+            $this->db->prepare(
+                'DELETE FROM users WHERE id = ? AND IFNULL(is_vendor,0) = 0 AND managed_by_user_id IS NOT NULL'
+            )->execute([$userId]);
+            return true;
         }
         $this->db->prepare('DELETE FROM users WHERE id = ? AND managed_by_user_id = ? AND IFNULL(is_vendor,0) = 0')
             ->execute([$userId, $managerId]);
