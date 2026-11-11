@@ -61,6 +61,9 @@ loadmodule "sipmsgops.so"
 # async(sleep(...)) for Delayed Bye hold — bundled with opensips base package
 loadmodule "cfgutils.so"
 
+# Anti-flood (pike) — injected by stage 50 when pike.so is present
+@@OPENSIPS_PIKE_MODULE_BLOCK@@
+
 loadmodule "mi_fifo.so"
 modparam("mi_fifo", "fifo_name", "@@OPENSIPS_FIFO@@")
 modparam("mi_fifo", "fifo_mode", 0666)
@@ -145,6 +148,8 @@ modparam("drouting", "gw_id_avp", "$avp(dr_gw_id)")
 ####### Routing logic #########
 
 route {
+	@@OPENSIPS_PIKE_CHECK_BLOCK@@
+
 	# =====================================================================
 	# REGISTER FIRST — never proxy/relay (FQDN DNS to ourselves → 483/500).
 	# Must run before Max-Forwards / loose_route / is_myself checks.

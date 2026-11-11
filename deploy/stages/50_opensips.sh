@@ -95,10 +95,16 @@ HAVE_ALIAS_DB=0
 [[ -f "${OPENSIPS_MPATH}alias_db.so" ]] && HAVE_ALIAS_DB=1
 HAVE_EXEC=0
 [[ -f "${OPENSIPS_MPATH}exec.so" ]] && HAVE_EXEC=1
+HAVE_CACHEDB_REDIS=0
+[[ -f "${OPENSIPS_MPATH}cachedb_redis.so" ]] && HAVE_CACHEDB_REDIS=1
+HAVE_SQLOPS=0
+[[ -f "${OPENSIPS_MPATH}sqlops.so" ]] && HAVE_SQLOPS=1
 HAVE_CGRATES=0
 [[ -f "${OPENSIPS_MPATH}cgrates.so" ]] && HAVE_CGRATES=1
 HAVE_PROTO_WS=0
 [[ -f "${OPENSIPS_MPATH}proto_ws.so" ]] && HAVE_PROTO_WS=1
+HAVE_PIKE=0
+[[ -f "${OPENSIPS_MPATH}pike.so" ]] && HAVE_PIKE=1
 
 # ---------------------------------------------------------------------------
 # 4. MySQL schemas for OpenSIPS modules
@@ -264,22 +270,177 @@ else
   export OPENSIPS_EXEC_BLOCK='# exec not installed'
 fi
 
-# DNC / rate-cap: template always calls these routes — provide no-op stubs so
-# OpenSIPS can start. Real Redis/SQL DNC is applied later by fix-opensips-dnc.sh
-# / portal when cachedb_redis or sqlops is available.
-export OPENSIPS_DNC_MODULES="${OPENSIPS_DNC_MODULES:-}"
-if [[ -z "${OPENSIPS_DNC_ROUTE:-}" ]]; then
-  export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
+if (( HAVE_PIKE )); then
+  export OPENSIPS_PIKE_MODULE_BLOCK='loadmodule "pike.so"
+modparam("pike", "sampling_time_unit", 2)
+modparam("pike", "reqs_density_per_unit", 30)
+modparam("pike", "remove_latency", 4)'
+  export OPENSIPS_PIKE_CHECK_BLOCK='if (!pike_check_req()) {
+		xlog("L_WARN", "pike drop flood from=$si method=$rm\n");
+		drop();
+		exit;
+	}'
+  log_info "pike anti-flood enabled (30 req / 2s sampling)"
+else
+  export OPENSIPS_PIKE_MODULE_BLOCK='# pike.so not installed'
+  export OPENSIPS_PIKE_CHECK_BLOCK='# pike check skipped'
+fi
+
+# DNC hot-path (Redis preferred; sqlops fallback). Template always calls these routes.
+mysql_root "${DB_OPENSIPS}" -e \
+  "CREATE TABLE IF NOT EXISTS dnc_cache (
+    group_id INT UNSIGNED NOT NULL,
+    number_digits VARCHAR(32) NOT NULL,
+    PRIMARY KEY (group_id, number_digits)
+  ) ENGINE=InnoDB DEFAULT CHARSET=latin1" 2>/dev/null || true
+
+if [[ -z "${OPENSIPS_DNC_MODULES:-}" && -z "${OPENSIPS_DNC_ROUTE:-}" ]]; then
+  if (( HAVE_CACHEDB_REDIS )); then
+    _redis_pw="$(get_secret redis_password 2>/dev/null || true)"
+    _redis_db="${REDIS_PORTAL_DB:-1}"
+    if [[ -n "${_redis_pw}" ]]; then
+      _redis_enc="$(python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["P"], safe=""))' P="${_redis_pw}")"
+      _redis_url="redis://:${_redis_enc}@127.0.0.1:6379/${_redis_db}"
+    else
+      _redis_url="redis://127.0.0.1:6379/${_redis_db}"
+    fi
+    export OPENSIPS_DNC_MODULES="loadmodule \"cachedb_redis.so\"
+modparam(\"cachedb_redis\", \"cachedb_url\", \"redis:dnc=>${_redis_url}\")"
+    export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
+	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
+		return;
+	}
+	$var(dncid) = $avp(os_dncid);
+	$var(dnc_dst) = $(rU{re.subst,/[^0-9]//g});
+	if ($(var(dnc_dst){s.len}) < 3) {
+		return;
+	}
+	$var(dnc_key) = "ownswitch:dnc:" + $var(dncid);
+	$var(dnc_hit) = NULL;
+	if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_dst)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+		xlog("L_WARN", "SIP DNC hit group=$var(dncid) dst=$var(dnc_dst) — block before trunk\n");
+		acc_db_request("403 Do Not Call", "acc");
+		send_reply(403, "Do Not Call");
+		exit;
+	}
+	$var(dnc_alt) = NULL;
+	if ($(var(dnc_dst){s.len}) == 11 && $(var(dnc_dst){s.substr,0,1}) == "1") {
+		$var(dnc_alt) = $(var(dnc_dst){s.substr,1,0});
+	} else if ($(var(dnc_dst){s.len}) == 10) {
+		$var(dnc_alt) = "1" + $var(dnc_dst);
+	}
+	if ($var(dnc_alt) != NULL && $(var(dnc_alt){s.len}) >= 3) {
+		$var(dnc_hit) = NULL;
+		if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_alt)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+			xlog("L_WARN", "SIP DNC hit (NANP alt) group=$var(dncid) dst=$var(dnc_dst) alt=$var(dnc_alt)\n");
+			acc_db_request("403 Do Not Call", "acc");
+			send_reply(403, "Do Not Call");
+			exit;
+		}
+	}
+}
+route[check_dnc] {
+	if ($avp(dr_gw_attrs) == NULL) {
+		return;
+	}
+	$var(dncid) = $(avp(dr_gw_attrs){param.value,dncid});
+	if ($var(dncid) == NULL || $(var(dncid){s.len}) == 0 || $(var(dncid){s.int}) <= 0) {
+		return;
+	}
+	$var(dnc_dst) = $(dlg_val(os_dst){re.subst,/[^0-9]//g});
+	if ($var(dnc_dst) == NULL || $(var(dnc_dst){s.len}) < 3) {
+		$var(dnc_dst) = $(rU{re.subst,/[^0-9]//g});
+	}
+	if ($(var(dnc_dst){s.len}) < 3) {
+		return;
+	}
+	$var(dnc_key) = "ownswitch:dnc:" + $var(dncid);
+	$var(dnc_hit) = NULL;
+	if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_dst)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+		xlog("L_WARN", "Trunk DNC hit group=$var(dncid) dst=$var(dnc_dst) — instant block (no vendor)\n");
+		acc_db_request("403 Do Not Call", "acc");
+		send_reply(403, "Do Not Call");
+		exit;
+	}
+	$var(dnc_alt) = NULL;
+	if ($(var(dnc_dst){s.len}) == 11 && $(var(dnc_dst){s.substr,0,1}) == "1") {
+		$var(dnc_alt) = $(var(dnc_dst){s.substr,1,0});
+	} else if ($(var(dnc_dst){s.len}) == 10) {
+		$var(dnc_alt) = "1" + $var(dnc_dst);
+	}
+	if ($var(dnc_alt) != NULL && $(var(dnc_alt){s.len}) >= 3) {
+		$var(dnc_hit) = NULL;
+		if (cache_raw_query("redis:dnc", "SISMEMBER $var(dnc_key) $var(dnc_alt)", "$var(dnc_hit)") && $var(dnc_hit) != NULL && $(var(dnc_hit){s.int}) == 1) {
+			xlog("L_WARN", "Trunk DNC hit (NANP alt) group=$var(dncid) dst=$var(dnc_dst) alt=$var(dnc_alt)\n");
+			acc_db_request("403 Do Not Call", "acc");
+			send_reply(403, "Do Not Call");
+			exit;
+		}
+	}
+}'
+    log_info "DNC: Redis SISMEMBER path enabled (cachedb_redis)"
+  else
+    export OPENSIPS_DNC_MODULES="${OPENSIPS_DNC_MODULES:-}"
+    export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
 	return;
 }
 route[check_dnc] {
 	return;
 }'
+    log_warn "DNC: cachedb_redis missing — stubs only (install opensips redis module)"
+  fi
 fi
+
+# Rate CAP via portal PHP (exec → bin/dial-cap-check.php)
 if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
-  export OPENSIPS_RATE_CAP_ROUTE='route[check_rate_cap] {
+  _cap_php="$(command -v php || echo /usr/bin/php)"
+  _cap_script="/opt/ownswitch/current/bin/dial-cap-check.php"
+  [[ -f "${_cap_script}" ]] || _cap_script="/opt/ownswitch-src/bin/dial-cap-check.php"
+  if (( HAVE_EXEC )) && [[ -f "${_cap_script}" ]]; then
+    export OPENSIPS_RATE_CAP_ROUTE='route[check_rate_cap] {
+	if ($avp(dr_gw_attrs) == NULL) {
+		return;
+	}
+	$var(tid) = $(avp(dr_gw_attrs){param.value,tid});
+	if ($var(tid) == NULL || $(var(tid){s.len}) == 0) {
+		return;
+	}
+	$var(cap_user) = $au;
+	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
+		$var(cap_user) = $fU;
+	}
+	if (!exec("'"${_cap_php}"' '"${_cap_script}"' $var(cap_user) $rU $var(tid)")) {
+		xlog("L_WARN", "Rate Cap Exceeded user=$var(cap_user) dst=$rU trunk=$var(tid)\n");
+		if ($var(cap_tries) == NULL) {
+			$var(cap_tries) = 0;
+		}
+		$var(cap_tries) = $(var(cap_tries){s.int}) + 1;
+		if ($(var(cap_tries){s.int}) < 8 && use_next_gw()) {
+			route(check_rate_cap);
+			return;
+		}
+		send_reply(403, "Rate Cap Exceeded");
+		exit;
+	}
+}'
+    log_info "Rate CAP: exec → ${_cap_script}"
+  else
+    export OPENSIPS_RATE_CAP_ROUTE='route[check_rate_cap] {
 	return;
 }'
+    log_warn "Rate CAP: exec/dial-cap-check missing — stub only"
+  fi
+fi
+
+# Fail2ban feed: copy digest-auth failure lines into /var/log/opensips/auth.log
+install -d -m 0755 /var/log/opensips
+touch /var/log/opensips/auth.log
+chown opensips:opensips /var/log/opensips/auth.log 2>/dev/null || true
+chmod 640 /var/log/opensips/auth.log || true
+if [[ -f "${TEMPLATE_DIR}/rsyslog-opensips-auth.conf" ]]; then
+  install -m 0644 "${TEMPLATE_DIR}/rsyslog-opensips-auth.conf" /etc/rsyslog.d/30-opensips-auth.conf
+  systemctl reload rsyslog 2>/dev/null || systemctl restart rsyslog 2>/dev/null || true
+  note_change "rsyslog opensips auth → /var/log/opensips/auth.log"
 fi
 
 if ! (( HAVE_CGRATES )); then
