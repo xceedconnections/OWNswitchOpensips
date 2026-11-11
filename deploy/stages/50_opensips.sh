@@ -299,7 +299,7 @@ if [[ -z "${OPENSIPS_DNC_MODULES:-}" && -z "${OPENSIPS_DNC_ROUTE:-}" ]]; then
     _redis_pw="$(get_secret redis_password 2>/dev/null || true)"
     _redis_db="${REDIS_PORTAL_DB:-1}"
     if [[ -n "${_redis_pw}" ]]; then
-      _redis_enc="$(python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["P"], safe=""))' P="${_redis_pw}")"
+      _redis_enc="$(P="${_redis_pw}" python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["P"], safe=""))')"
       _redis_url="redis://:${_redis_enc}@127.0.0.1:6379/${_redis_db}"
     else
       _redis_url="redis://127.0.0.1:6379/${_redis_db}"
