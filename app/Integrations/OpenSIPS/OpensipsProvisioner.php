@@ -2152,10 +2152,16 @@ final class OpensipsProvisioner
 
         $raw = strtoupper((string) ($match['state'] ?? ''));
         $enabled = strtolower((string) ($match['enabled'] ?? 'yes'));
-        $registered = str_contains($raw, 'REGISTERED')
-            && !str_contains($raw, 'UNREGISTER')
-            && $enabled !== 'no';
-        $state = $registered ? 'REGED' : (str_contains($raw, 'REGISTERING') ? 'REGISTERING' : 'UNREGED');
+        // NOT_REGISTERED_STATE contains the substring "REGISTERED" — exclude it explicitly.
+        $registered = $enabled !== 'no' && (
+            in_array($raw, ['REGISTERED_STATE', 'REGISTERED', 'REGED'], true)
+            || (str_contains($raw, 'REGISTERED')
+                && !str_contains($raw, 'NOT_REGISTERED')
+                && !str_contains($raw, 'UNREGISTER'))
+        );
+        $state = $registered
+            ? 'REGED'
+            : (str_contains($raw, 'REGISTERING') ? 'REGISTERING' : 'UNREGED');
 
         return [
             'label' => $state,
