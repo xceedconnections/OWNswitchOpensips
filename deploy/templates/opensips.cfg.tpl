@@ -375,6 +375,9 @@ route {
 	# SIP-user DNC: block before any trunk/vendor is contacted (uses original dialled $rU)
 	route(check_sip_dnc);
 
+	# No matching plan/tariff prefix → reject (aligns with RouteSimulator "unrated")
+	route(check_customer_rate);
+
 	# Group "1" is filled by Ownswitch (php bin/sync-opensips-trunks.php / trunk+route save)
 	# 5th arg = gw attrs pvar (fu=/fd=/rstrip= from trunk sync). strip/pri_prefix via DR.
 	if (!do_routing(1, , , , $avp(dr_gw_attrs))) {
@@ -840,6 +843,9 @@ route[check_cid_len] {
 		exit;
 	}
 }
+
+# Customer tariff / plan-prefix match (bin/dial-rate-check.php) — reject unrated destinations
+@@OPENSIPS_CUSTOMER_RATE_ROUTE@@
 
 # Rate CAP: portal compares buy rate vs SIP-user CAP and trunk CAP (bin/dial-cap-check.php)
 # (OPENSIPS_RATE_CAP_ROUTE injected on its own line — never put multiline placeholders inside # comments)

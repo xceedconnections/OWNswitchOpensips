@@ -417,6 +417,39 @@ route[check_dnc] {
   fi
 fi
 
+# Customer tariff / plan-prefix gate (exec → bin/dial-rate-check.php) — reject unrated dials
+_rate_php="$(command -v php || echo /usr/bin/php)"
+if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
+  _rate_script="/opt/ownswitch/current/bin/dial-rate-check.php"
+  [[ -f "${_rate_script}" ]] || _rate_script="/opt/ownswitch-src/bin/dial-rate-check.php"
+  if (( HAVE_EXEC )) && [[ -f "${_rate_script}" ]]; then
+    export OPENSIPS_CUSTOMER_RATE_ROUTE='route[check_customer_rate] {
+	$var(rate_user) = $avp(os_auth_user);
+	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
+		$var(rate_user) = $au;
+	}
+	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
+		$var(rate_user) = $fU;
+	}
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_rate_script}"' $var(rate_user) $rU")) {
+		xlog("L_WARN", "Unrated Destination user=$var(rate_user) dst=$rU\n");
+		acc_db_request("403 Unrated Destination", "acc");
+		send_reply(403, "Unrated Destination");
+		exit;
+	}
+}'
+    usermod -aG ownswitch opensips 2>/dev/null || true
+    chmod 755 "$(dirname "${_rate_script}")" 2>/dev/null || true
+    chmod 644 "${_rate_script}" 2>/dev/null || true
+    log_info "Customer rate gate: exec → ${_rate_script}"
+  else
+    export OPENSIPS_CUSTOMER_RATE_ROUTE='route[check_customer_rate] {
+	return;
+}'
+    log_warn "Customer rate gate: exec/dial-rate-check missing — stub only"
+  fi
+fi
+
 # Rate CAP via portal PHP (exec → bin/dial-cap-check.php)
 _cap_php="$(command -v php || echo /usr/bin/php)"
 if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
