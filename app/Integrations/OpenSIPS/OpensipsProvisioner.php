@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ownswitch\Integrations\OpenSIPS;
 
 use Ownswitch\Support\Crypto;
+use Ownswitch\Support\SipHosts;
 use PDO;
 
 /**
@@ -233,25 +234,25 @@ final class OpensipsProvisioner
             $db->prepare($sql)->execute(array_values($insert));
         }
 
-        // Fixed-host SIP users → permissions address (customer group); honour sip_port
+        // Fixed-host SIP users → permissions address (customer group); honour sip_port.
+        // sip_host may be comma-separated (multi-IP peers e.g. ViciDial); parse all IPs.
         if ($account !== null && $this->tableExists('address')) {
-            $host = trim((string) ($account['sip_host'] ?? 'dynamic'));
             $ctx = 'sip:' . $username;
             $db->prepare('DELETE FROM address WHERE grp = ? AND context_info = ?')->execute([self::GRP_CUSTOMER, $ctx]);
-            if ($host !== '' && strtolower($host) !== 'dynamic' && filter_var($host, FILTER_VALIDATE_IP)) {
-                $port = (int) ($account['sip_port'] ?? 5060);
-                if ($port < 0 || $port > 65535) {
-                    $port = 5060;
+            $ips = SipHosts::parse((string) ($account['sip_host'] ?? 'dynamic'));
+            if ($ips !== []) {
+                foreach ($ips as $ip) {
+                    // port 0 = any source port (ViciDial/softswitch often use ephemeral ports).
+                    // sip_port is only for OPTIONS qualify toward the peer, not ACL match.
+                    $this->upsertAddress(
+                        self::GRP_CUSTOMER,
+                        $ip,
+                        str_contains($ip, ':') ? 128 : 32,
+                        0,
+                        'any',
+                        $ctx
+                    );
                 }
-                // 0 = any port (OpenSIPS address semantics)
-                $this->upsertAddress(
-                    self::GRP_CUSTOMER,
-                    $host,
-                    str_contains($host, ':') ? 128 : 32,
-                    $port,
-                    'any',
-                    $ctx
-                );
             }
         }
     }
