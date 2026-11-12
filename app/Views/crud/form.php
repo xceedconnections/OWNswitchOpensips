@@ -131,9 +131,13 @@ $panelClass = 'os-panel col-12' . ($enhancedForm ? ' os-entity-form' : '');
                             $online = !empty($peer['online']);
                             $ms = isset($peer['ms']) && is_numeric($peer['ms']) ? (int) $peer['ms'] : null;
                             $state = trim((string) ($peer['state'] ?? ''));
-                            $msCls = ($online && $ms !== null && $ms > 0)
-                                ? ($ms < 80 ? 'ok' : ($ms < 200 ? 'warn' : 'bad'))
-                                : 'off';
+                            if ($online && $ms !== null && $ms > 0) {
+                                $msCls = $ms < 80 ? 'ok' : ($ms < 200 ? 'warn' : 'bad');
+                            } elseif ($online) {
+                                $msCls = 'ok'; // IP AUTH / REACHABLE without ms
+                            } else {
+                                $msCls = 'off';
+                            }
                             ?>
                             <div class="os-ip-latency-card os-ip-latency-card--<?= e($msCls) ?>">
                                 <div class="os-ip-latency-top">
@@ -145,7 +149,7 @@ $panelClass = 'os-panel col-12' . ($enhancedForm ? ' os-entity-form' : '');
                                     <?php if ($online && $ms !== null && $ms > 0): ?>
                                         <span class="os-mono"><?= e((string) $ms) ?> ms</span>
                                     <?php elseif ($online): ?>
-                                        <span class="text-muted"><?= e($state !== '' ? $state : 'REACHABLE') ?></span>
+                                        <span class="text-muted"><?= e($state !== '' ? $state : 'IP AUTH') ?></span>
                                     <?php else: ?>
                                         <span class="text-muted">offline</span>
                                     <?php endif; ?>
@@ -153,7 +157,7 @@ $panelClass = 'os-panel col-12' . ($enhancedForm ? ' os-entity-form' : '');
                             </div>
                         <?php endforeach; ?>
                     </div>
-                    <p class="os-ip-latency-note mb-0">Green &lt; 80&nbsp;ms · Amber &lt; 200&nbsp;ms · Red ≥ 200&nbsp;ms. Requires Network → Qualify = Yes.</p>
+                    <p class="os-ip-latency-note mb-0">IP peers are authorized by ACL (no REGISTER). Latency shows when the peer answers SIP OPTIONS (Qualify = Yes). Many dialers block OPTIONS — that still shows as IP AUTH, not offline.</p>
                 </div>
             <?php else: ?>
             <div class="row g-3<?= $useTabs ? ' mb-2' : '' ?><?= $enhancedForm ? ' os-form-fields' : '' ?>">

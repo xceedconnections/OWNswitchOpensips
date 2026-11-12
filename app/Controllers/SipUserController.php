@@ -440,12 +440,17 @@ final class SipUserController extends CrudController
         $rows = [];
         foreach ($ips as $ip) {
             $ms = null;
-            $online = false;
-            $state = '';
+            // IP-based peers are authorized by ACL — they do not REGISTER.
+            // OPTIONS latency is optional; many dialers (ViciDial) ignore/block OPTIONS.
             if ($qualify) {
                 $ms = SipOptionsProbe::rttMs($ip, $port, 1.2, $user);
-                $online = $ms !== null;
-                $state = $online ? 'REACHABLE' : '';
+            }
+            if ($ms !== null) {
+                $online = true;
+                $state = 'REACHABLE';
+            } else {
+                $online = true;
+                $state = 'IP AUTH';
             }
             $rows[] = [
                 'ip' => $ip,
@@ -531,11 +536,14 @@ final class SipUserController extends CrudController
                         $ms = $fromFs;
                     }
                 }
-            } elseif ($qualify && !$isDynamic) {
-                // Fixed-IP peer(s): OPTIONS the first IP for Live column.
-                $ms = SipOptionsProbe::rttMs($peerIps[0], $port, 1.5, $user);
-                $online = $ms !== null;
-                $state = $online ? 'REACHABLE' : '';
+            } elseif (!$isDynamic) {
+                // Fixed-IP peer(s): authorized via address ACL (no REGISTER).
+                // OPTIONS is optional latency only — dialers often do not reply.
+                if ($qualify) {
+                    $ms = SipOptionsProbe::rttMs($peerIps[0], $port, 1.5, $user);
+                }
+                $online = true;
+                $state = ($ms !== null) ? 'REACHABLE' : 'IP AUTH';
             }
 
             // Dynamic REGED UAs sit behind NAT — probe via OpenSIPS (OPTIONS sip:user@public:5060

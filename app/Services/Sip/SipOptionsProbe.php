@@ -70,8 +70,8 @@ final class SipOptionsProbe
         $branch = 'z9hG4bK' . bin2hex(random_bytes(6));
         $callId = bin2hex(random_bytes(8)) . '@ownswitch';
         $tag = bin2hex(random_bytes(4));
-        // Via/Contact must be a routable IP so peers that validate Via still reply
-        $fromHost = $ip;
+        // Via/Contact must be OUR public IP (not the peer). Wrong Via breaks many Asterisk replies.
+        $fromHost = self::localSipHost($ip);
         $ruriUser = ($user !== null && $user !== '' && preg_match('/^[A-Za-z0-9._\-+=]+$/', $user))
             ? $user
             : 'options';
@@ -130,5 +130,28 @@ final class SipOptionsProbe
             return 'n/a';
         }
         return $ms . ' ms';
+    }
+
+    /** Prefer configured SIP public IP for Via/Contact; fall back to peer only as last resort. */
+    private static function localSipHost(string $fallbackPeerIp): string
+    {
+        try {
+            $pub = trim((string) \Ownswitch\App::config('app.integrations.opensips.public_ip', ''));
+            if ($pub !== '' && filter_var($pub, FILTER_VALIDATE_IP)) {
+                return $pub;
+            }
+            $dom = trim((string) \Ownswitch\App::config('app.integrations.opensips.sip_domain', ''));
+            if ($dom !== '' && filter_var($dom, FILTER_VALIDATE_IP)) {
+                return $dom;
+            }
+            if ($dom !== '') {
+                $resolved = @gethostbyname($dom);
+                if (is_string($resolved) && $resolved !== '' && filter_var($resolved, FILTER_VALIDATE_IP)) {
+                    return $resolved;
+                }
+            }
+        } catch (\Throwable) {
+        }
+        return $fallbackPeerIp;
     }
 }
