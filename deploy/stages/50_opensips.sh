@@ -417,8 +417,44 @@ route[check_dnc] {
   fi
 fi
 
-# Customer tariff / plan-prefix gate (exec → bin/dial-rate-check.php) — reject unrated dials
+# SIP-user destination prefix rewrite (exec → bin/dial-dst-rewrite.php)
 _rate_php="$(command -v php || echo /usr/bin/php)"
+if [[ -z "${OPENSIPS_DST_REWRITE_ROUTE:-}" ]]; then
+  _rw_script="/opt/ownswitch/current/bin/dial-dst-rewrite.php"
+  [[ -f "${_rw_script}" ]] || _rw_script="/opt/ownswitch-src/bin/dial-dst-rewrite.php"
+  if (( HAVE_EXEC )) && [[ -f "${_rw_script}" ]]; then
+    export OPENSIPS_DST_REWRITE_ROUTE='route[apply_sip_dst_rewrite] {
+	$var(rw_user) = $avp(os_auth_user);
+	if ($var(rw_user) == NULL || $(var(rw_user){s.len}) == 0) {
+		$var(rw_user) = $au;
+	}
+	if ($var(rw_user) == NULL || $(var(rw_user){s.len}) == 0) {
+		$var(rw_user) = $fU;
+	}
+	$var(rw_out) = NULL;
+	if (exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_rw_script}"' $var(rw_user) $rU", , $var(rw_out))) {
+		$var(rw_dst) = $(var(rw_out){re.subst,/[^0-9]//g});
+		if ($var(rw_dst) != NULL && $(var(rw_dst){s.len}) >= 3 && $var(rw_dst) != $rU) {
+			xlog("L_INFO", "dst rewrite user=$var(rw_user) from=$rU to=$var(rw_dst)\n");
+			$rU = $var(rw_dst);
+		} else if ($var(rw_dst) != NULL && $(var(rw_dst){s.len}) >= 3) {
+			$rU = $var(rw_dst);
+		}
+	}
+}'
+    usermod -aG ownswitch opensips 2>/dev/null || true
+    chmod 755 "$(dirname "${_rw_script}")" 2>/dev/null || true
+    chmod 644 "${_rw_script}" 2>/dev/null || true
+    log_info "DST rewrite: exec → ${_rw_script}"
+  else
+    export OPENSIPS_DST_REWRITE_ROUTE='route[apply_sip_dst_rewrite] {
+	return;
+}'
+    log_warn "DST rewrite: exec/dial-dst-rewrite missing — stub only"
+  fi
+fi
+
+# Customer tariff / plan-prefix gate (exec → bin/dial-rate-check.php) — reject unrated dials
 if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
   _rate_script="/opt/ownswitch/current/bin/dial-rate-check.php"
   [[ -f "${_rate_script}" ]] || _rate_script="/opt/ownswitch-src/bin/dial-rate-check.php"
@@ -431,6 +467,15 @@ if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
 	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
 		$var(rate_user) = $fU;
 	}
+	# Ensure ACC / CDR sees SIP user + (possibly rewritten) destination even on reject
+	$acc_extra(src) = $dlg_val(os_src);
+	$acc_extra(dst) = $rU;
+	if ($dlg_val(os_cli) != NULL && $(dlg_val(os_cli){s.len}) > 0) {
+		$acc_extra(cli) = $dlg_val(os_cli);
+	} else {
+		$acc_extra(cli) = $fU;
+	}
+	$acc_extra(ip) = $si;
 	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_rate_script}"' $var(rate_user) $rU")) {
 		xlog("L_WARN", "Unrated Destination user=$var(rate_user) dst=$rU\n");
 		acc_db_request("403 Unrated Destination", "acc");

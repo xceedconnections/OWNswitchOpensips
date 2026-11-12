@@ -14,6 +14,7 @@ use Ownswitch\Services\Sip\SipOptionsProbe;
 use Ownswitch\Services\StirShaken\StirShakenCertificateService;
 use Ownswitch\Support\Crypto;
 use Ownswitch\Support\DstFormat;
+use Ownswitch\Support\DstPrefixMap;
 use Ownswitch\Support\MediaPolicy;
 use Ownswitch\Support\SipCodecs;
 use Ownswitch\Support\SipHosts;
@@ -263,6 +264,15 @@ final class SipUserController extends CrudController
                 'default' => \Ownswitch\Support\DstFormat::AS_IS,
                 'list' => true,
                 'help' => 'Rewrite the dialled number before the trunk. E.164 with + : 12135550123 → +12135550123. Trunk Destination format is applied after this.',
+                'section' => 'CLI and dial format',
+            ],
+            [
+                'name' => 'dst_prefix_map',
+                'label' => 'Destination prefix replace',
+                'type' => 'textarea',
+                'rows' => 4,
+                'wide' => true,
+                'help' => 'One rule per line: FROM=TO. If the dialled number starts with FROM, that prefix is replaced with TO before rating, CDR, and vendor. Example: 2=12 turns 2138007447 into 12138007447. Longest match wins. Leave empty for no change.',
                 'section' => 'CLI and dial format',
             ],
             [
@@ -698,6 +708,15 @@ final class SipUserController extends CrudController
         $data['dst_format'] = DstFormat::normalize(
             isset($data['dst_format']) ? (string) $data['dst_format'] : null
         );
+        DstPrefixMap::ensureColumn($this->db());
+        if (array_key_exists('dst_prefix_map', $data)) {
+            $data['dst_prefix_map'] = DstPrefixMap::normalize(
+                isset($data['dst_prefix_map']) ? (string) $data['dst_prefix_map'] : null
+            );
+            if ($data['dst_prefix_map'] === '') {
+                $data['dst_prefix_map'] = null;
+            }
+        }
         $tg = $data['routing_plan_id'] ?? null;
         $data['routing_plan_id'] = ($tg === null || $tg === '') ? null : (int) $tg;
         if (!array_key_exists('dnc_group_id', $data) || $data['dnc_group_id'] === '' || $data['dnc_group_id'] === null) {

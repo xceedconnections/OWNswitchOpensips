@@ -336,6 +336,8 @@ route {
 	create_dialog("BPp");
 	# Prefer digest auth user — $fU may be presented CallerID (ViciDial)
 	route(resolve_os_src);
+	# SIP-user destination prefix replace (2=12 → 213… becomes 1213…) before rating/CDR/vendor
+	route(apply_sip_dst_rewrite);
 	$dlg_val(os_dst) = $rU;
 	# Presented CLI starts as From user; apply_sip_cid replaces with display_name / fixed
 	$dlg_val(os_cli) = $fU;
@@ -843,6 +845,9 @@ route[check_cid_len] {
 		exit;
 	}
 }
+
+# SIP-user destination prefix replace (bin/dial-dst-rewrite.php)
+@@OPENSIPS_DST_REWRITE_ROUTE@@
 
 # Customer tariff / plan-prefix match (bin/dial-rate-check.php) — reject unrated destinations
 @@OPENSIPS_CUSTOMER_RATE_ROUTE@@
