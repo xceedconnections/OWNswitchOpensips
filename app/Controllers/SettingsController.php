@@ -8,6 +8,7 @@ use Ownswitch\App;
 use Ownswitch\Http\Request;
 use Ownswitch\Http\Response;
 use Ownswitch\Services\Mail\MailService;
+use Ownswitch\Services\Settings\MediaPolicyDefaultSync;
 use Ownswitch\Services\Settings\SettingsService;
 use Ownswitch\Support\SipCodecs;
 
@@ -169,6 +170,17 @@ final class SettingsController extends BaseController
         if (array_key_exists('failover_sip_codes', $clean) || array_key_exists('failover_max_retries', $clean)
             || array_key_exists('prepaid_hard_cap_seconds', $clean) || array_key_exists('kill_switch', $clean)) {
             $msg .= ' OpenSIPS routing reads these on the next call (no restart needed).';
+        }
+        if (array_key_exists('default_media_policy', $clean)
+            && (($before['default_media_policy'] ?? null) !== ($clean['default_media_policy'] ?? null))) {
+            try {
+                $sync = (new MediaPolicyDefaultSync($this->db()))->sync();
+                $msg .= ' Default media synced to OpenSIPS (' . $sync['policy'] . ', '
+                    . $sync['subscribers'] . ' default SIP user(s)). Restart OpenSIPS if cfg was patched.';
+            } catch (\Throwable $e) {
+                error_log('[ownswitch] media policy sync: ' . $e->getMessage());
+                $msg .= ' Warning: could not sync default media to OpenSIPS.';
+            }
         }
         $tab = is_string($r->post['active_tab'] ?? null) ? (string) $r->post['active_tab'] : 'general';
         $q = in_array($tab, ['general', 'email'], true) && $tab !== 'general' ? '?tab=' . $tab : '';

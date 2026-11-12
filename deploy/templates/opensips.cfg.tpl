@@ -216,7 +216,7 @@ route {
 			}
 			if (is_method("INVITE|ACK|BYE|UPDATE|PRACK") && $avp(os_media) != "direct") {
 				if ($avp(os_media) == "record") {
-					rtpengine_manage("replace-session-connection replace-origin ICE=remove recording-label=$ci");
+					rtpengine_manage("replace-session-connection replace-origin ICE=remove record-call=yes recording-label=$ci");
 				} else {
 					rtpengine_manage();
 				}
@@ -315,8 +315,10 @@ route {
 			$dlg_val(os_dtmf) = "1";
 		}
 		do_accounting("db", "cdr|missed|failed");
+		# Empty media_policy → Settings → Default media policy (rendered at deploy / synced on save)
 		if ($avp(os_media) == NULL || $(avp(os_media){s.len}) == 0) {
-			$avp(os_media) = "relay";
+			# OWN_DEFAULT_MEDIA
+			$avp(os_media) = "@@DEFAULT_MEDIA_POLICY@@";
 		}
 		route(apply_media);
 		t_on_reply("handle_reply");
@@ -354,9 +356,10 @@ route {
 	}
 	do_accounting("db", "cdr|missed|failed");
 
-	# Media: $avp(os_media) loaded from subscriber.media_policy on digest auth (else relay)
+	# Media: $avp(os_media) from subscriber.media_policy; empty → Settings default
 	if ($avp(os_media) == NULL || $(avp(os_media){s.len}) == 0) {
-		$avp(os_media) = "relay";
+		# OWN_DEFAULT_MEDIA
+		$avp(os_media) = "@@DEFAULT_MEDIA_POLICY@@";
 	}
 
 	route(apply_media);
@@ -496,10 +499,15 @@ route[inbound_from_carrier_deliver] {
 # dtmf_pass=0/no → strip telephone-event so RFC2833 DTMF is not negotiated
 route[apply_media] {
 	# WebRTC (ws/wss): bridge browser SAVPF/DTLS ↔ PSTN RTP/AVP via RTPengine.
-	# Direct is impossible on WS — upgrade to relay, but keep record so WAV still lands.
+	# Direct is impossible on WS — use Settings default when empty/direct (never stay on direct),
+	# and keep an explicit "record" so WebRTC still records.
 	if ($socket_in(proto) == "ws" || $socket_in(proto) == "wss") {
-		if ($avp(os_media) == "direct" || $avp(os_media) == NULL || $(avp(os_media){s.len}) == 0) {
-			$avp(os_media) = "relay";
+		if ($avp(os_media) == NULL || $(avp(os_media){s.len}) == 0 || $avp(os_media) == "direct") {
+			# OWN_DEFAULT_MEDIA
+			$avp(os_media) = "@@DEFAULT_MEDIA_POLICY@@";
+			if ($avp(os_media) == "direct" || $avp(os_media) == NULL || $(avp(os_media){s.len}) == 0) {
+				$avp(os_media) = "relay";
+			}
 		}
 		$dlg_val(os_webrtc) = "1";
 		xlog("L_INFO", "media WebRTC bridge proto=$socket_in(proto) user=$fU media=$avp(os_media)\n");
@@ -512,11 +520,12 @@ route[apply_media] {
 		xlog("L_INFO", "media=direct for $fU (no rtpengine)\n");
 		return;
 	}
-	# Offer toward PSTN: use rtpengine_offer() so DTLS stays on the WebRTC leg
+	# Offer toward PSTN: use rtpengine_offer() so DTLS stays on the WebRTC leg.
+	# record-call=yes is required — recording-label alone does not start a recording.
 	if ($dlg_val(os_webrtc) == "1") {
 		if ($avp(os_media) == "record") {
 			xlog("L_INFO", "rtpengine_offer WebRTC→PSTN + record user=$fU\n");
-			rtpengine_offer("replace-session-connection replace-origin ICE=remove RTP/AVP DTLS=off SDES=off rtcp-mux-demux recording-label=$ci$var(dtmf_flags)");
+			rtpengine_offer("replace-session-connection replace-origin ICE=remove RTP/AVP DTLS=off SDES=off rtcp-mux-demux record-call=yes recording-label=$ci$var(dtmf_flags)");
 		} else {
 			xlog("L_INFO", "rtpengine_offer WebRTC→PSTN user=$fU\n");
 			rtpengine_offer("replace-session-connection replace-origin ICE=remove RTP/AVP DTLS=off SDES=off rtcp-mux-demux$var(dtmf_flags)");
@@ -525,7 +534,7 @@ route[apply_media] {
 	}
 	if ($avp(os_media) == "record") {
 		xlog("L_INFO", "media=record for $fU (rtpengine + record)\n");
-		rtpengine_manage("replace-session-connection replace-origin ICE=remove recording-label=$ci$var(dtmf_flags)");
+		rtpengine_manage("replace-session-connection replace-origin ICE=remove record-call=yes recording-label=$ci$var(dtmf_flags)");
 		return;
 	}
 	if ($(var(dtmf_flags){s.len}) > 0) {

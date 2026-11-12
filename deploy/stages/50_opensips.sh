@@ -525,6 +525,22 @@ else
   log_warn "proto_ws.so missing — WebRTC dialer needs opensips with WebSocket support (try: apt-get install -y opensips-wss-module)"
 fi
 
+# Settings → Default media policy (used when SIP user media_policy is empty / Default)
+_default_media="relay"
+if command -v mysql >/dev/null 2>&1; then
+  _pw="$(cat /etc/ownswitch/secrets/mysql_ownswitch_password 2>/dev/null || true)"
+  if [[ -n "${_pw}" ]]; then
+    _v="$(mysql -uownswitch -p"${_pw}" -h127.0.0.1 ownswitch -N -e \
+      "SELECT setting_value FROM system_settings WHERE setting_key='default_media_policy' LIMIT 1" 2>/dev/null || true)"
+    _v="$(echo "${_v}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    if [[ "${_v}" == "direct" || "${_v}" == "relay" || "${_v}" == "record" ]]; then
+      _default_media="${_v}"
+    fi
+  fi
+fi
+export DEFAULT_MEDIA_POLICY="${_default_media}"
+log_info "OpenSIPS DEFAULT_MEDIA_POLICY=${DEFAULT_MEDIA_POLICY}"
+
 # ---------------------------------------------------------------------------
 # 6. Render + validate + activate cfg
 # ---------------------------------------------------------------------------

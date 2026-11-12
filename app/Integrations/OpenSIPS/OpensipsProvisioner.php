@@ -166,7 +166,15 @@ final class OpensipsProvisioner
             $this->ensureSubscriberExtraColumns();
             $cols = $this->columns('subscriber');
             if (in_array('media_policy', $cols, true)) {
-                $mp = strtolower(trim((string) ($account['_effective_media'] ?? $account['media_policy'] ?? 'relay')));
+                $mp = strtolower(trim((string) ($account['_effective_media'] ?? '')));
+                if ($mp === '' || $mp === 'default' || $mp === 'inherit') {
+                    $stored = isset($account['media_policy']) ? (string) $account['media_policy'] : null;
+                    try {
+                        $mp = \Ownswitch\Support\MediaPolicy::resolve($stored, $this->db());
+                    } catch (\Throwable) {
+                        $mp = 'relay';
+                    }
+                }
                 if ($mp === '' || $mp === 'default' || $mp === 'inherit') {
                     $mp = 'relay';
                 }
