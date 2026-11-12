@@ -495,11 +495,14 @@ route[inbound_from_carrier_deliver] {
 # Direct = skip RTPengine; Relay = rtpengine_manage(); Record = rtpengine + recording
 # dtmf_pass=0/no → strip telephone-event so RFC2833 DTMF is not negotiated
 route[apply_media] {
-	# WebRTC (ws/wss): bridge browser SAVPF/DTLS ↔ PSTN RTP/AVP via RTPengine
+	# WebRTC (ws/wss): bridge browser SAVPF/DTLS ↔ PSTN RTP/AVP via RTPengine.
+	# Direct is impossible on WS — upgrade to relay, but keep record so WAV still lands.
 	if ($socket_in(proto) == "ws" || $socket_in(proto) == "wss") {
-		$avp(os_media) = "relay";
+		if ($avp(os_media) == "direct" || $avp(os_media) == NULL || $(avp(os_media){s.len}) == 0) {
+			$avp(os_media) = "relay";
+		}
 		$dlg_val(os_webrtc) = "1";
-		xlog("L_INFO", "media forced relay for WebRTC proto=$socket_in(proto) user=$fU\n");
+		xlog("L_INFO", "media WebRTC bridge proto=$socket_in(proto) user=$fU media=$avp(os_media)\n");
 	}
 	$var(dtmf_flags) = "";
 	if ($avp(os_dtmf) == "no" || $avp(os_dtmf) == "0") {
@@ -511,8 +514,13 @@ route[apply_media] {
 	}
 	# Offer toward PSTN: use rtpengine_offer() so DTLS stays on the WebRTC leg
 	if ($dlg_val(os_webrtc) == "1") {
-		xlog("L_INFO", "rtpengine_offer WebRTC→PSTN user=$fU\n");
-		rtpengine_offer("replace-session-connection replace-origin ICE=remove RTP/AVP DTLS=off SDES=off rtcp-mux-demux$var(dtmf_flags)");
+		if ($avp(os_media) == "record") {
+			xlog("L_INFO", "rtpengine_offer WebRTC→PSTN + record user=$fU\n");
+			rtpengine_offer("replace-session-connection replace-origin ICE=remove RTP/AVP DTLS=off SDES=off rtcp-mux-demux recording-label=$ci$var(dtmf_flags)");
+		} else {
+			xlog("L_INFO", "rtpengine_offer WebRTC→PSTN user=$fU\n");
+			rtpengine_offer("replace-session-connection replace-origin ICE=remove RTP/AVP DTLS=off SDES=off rtcp-mux-demux$var(dtmf_flags)");
+		}
 		return;
 	}
 	if ($avp(os_media) == "record") {

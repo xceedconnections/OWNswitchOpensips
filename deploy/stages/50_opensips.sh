@@ -545,7 +545,18 @@ install -m 0640 -o root -g opensips "$TMP_CFG" "$CFG"
 rm -f "$TMP_CFG"
 note_change "wrote ${CFG}"
 
-# Ensure unit enabled; prefer packaged systemd unit
+# Ensure unit enabled; prefer packaged systemd unit.
+# Packaged After=mysqld.service misses Ubuntu's mysql.service → OpenSIPS can boot before MySQL and exit 255.
+install -d /etc/systemd/system/opensips.service.d
+cat >/etc/systemd/system/opensips.service.d/ownswitch-mysql.conf <<'EOF'
+[Unit]
+After=network-online.target mysql.service mysqld.service
+Wants=mysql.service
+
+[Service]
+Restart=on-failure
+RestartSec=5
+EOF
 systemctl daemon-reload || true
 systemctl enable opensips >/dev/null 2>&1 || true
 # Free port 5060 if something else still holds it (e.g. leftover FreeSWITCH)
