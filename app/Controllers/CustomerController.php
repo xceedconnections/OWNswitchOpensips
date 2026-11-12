@@ -297,11 +297,15 @@ final class CustomerController extends CrudController
 
         $sipUsers = [];
         try {
-            $st = $pdo->prepare('SELECT username, domain FROM sip_accounts WHERE customer_id = ?');
+            $st = $pdo->prepare('SELECT id, username, domain FROM sip_accounts WHERE customer_id = ?');
             $st->execute([$id]);
             $sipUsers = $st->fetchAll(\PDO::FETCH_ASSOC) ?: [];
         } catch (\PDOException) {
         }
+
+        // DDL must run outside a transaction — MySQL implicitly commits on CREATE TABLE,
+        // which previously left commit() with "There is no active transaction".
+        $this->ensureCustomerBalanceArchiveTable($pdo);
 
         $pdo->beginTransaction();
         try {
@@ -312,6 +316,27 @@ final class CustomerController extends CrudController
             try {
                 $pdo->prepare('UPDATE vouchers SET used_by_customer_id = NULL WHERE used_by_customer_id = ?')->execute([$id]);
             } catch (\PDOException) {
+            }
+
+            // Child rows of sip_accounts (FK without CASCADE) must go first.
+            $sipIds = array_values(array_filter(array_map(
+                static fn (array $s): int => (int) ($s['id'] ?? 0),
+                $sipUsers
+            )));
+            if ($sipIds !== []) {
+                $ph = implode(',', array_fill(0, count($sipIds), '?'));
+                foreach (['sip_account_cli_restrictions'] as $child) {
+                    try {
+                        $pdo->prepare("DELETE FROM `{$child}` WHERE sip_account_id IN ({$ph})")->execute($sipIds);
+                    } catch (\PDOException $e) {
+                        error_log('[ownswitch] user delete cleanup ' . $child . ': ' . $e->getMessage());
+                    }
+                }
+                try {
+                    $pdo->prepare("UPDATE did_assignments SET sip_account_id = NULL WHERE sip_account_id IN ({$ph})")->execute($sipIds);
+                } catch (\PDOException $e) {
+                    error_log('[ownswitch] user delete did sip null: ' . $e->getMessage());
+                }
             }
 
             foreach (
@@ -342,7 +367,9 @@ final class CustomerController extends CrudController
             if ((int) $left->fetchColumn() > 0) {
                 throw new \RuntimeException('SIP users could not be deleted for this account.');
             }
-            $pdo->commit();
+            if ($pdo->inTransaction()) {
+                $pdo->commit();
+            }
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -365,14 +392,8 @@ final class CustomerController extends CrudController
         return null;
     }
 
-    /**
-     * Snapshot final wallet into customer_balance_archives (ledger refill/charge rows stay forever).
-     *
-     * @param array<string,mixed> $customer
-     */
-    private function archiveCustomerBalance(\PDO $pdo, array $customer): void
+    private function ensureCustomerBalanceArchiveTable(\PDO $pdo): void
     {
-        $id = (int) $customer['id'];
         try {
             $pdo->exec(
                 'CREATE TABLE IF NOT EXISTS customer_balance_archives (
@@ -391,7 +412,16 @@ final class CustomerController extends CrudController
         } catch (\Throwable $e) {
             error_log('[ownswitch] balance archive schema: ' . $e->getMessage());
         }
+    }
 
+    /**
+     * Snapshot final wallet into customer_balance_archives (ledger refill/charge rows stay forever).
+     *
+     * @param array<string,mixed> $customer
+     */
+    private function archiveCustomerBalance(\PDO $pdo, array $customer): void
+    {
+        $id = (int) $customer['id'];
         $balance = '0.000000';
         $reserved = '0.000000';
         try {
