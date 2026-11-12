@@ -254,8 +254,9 @@ route {
 	# still proxy_authorize so load_credentials fills os_cid_mode / os_dncid / media AVPs.
 	# Without that, Softphone Display Name mode never runs (AVPs stay NULL → passthrough).
 	# Carrier ACL → deliver only if local AOR exists; else fall through to digest.
-	# OpenSIPS 3.6 permissions: avoid 4th/context AVP here (partition <<null>> fixup error).
-	if (check_source_address(1, $sp, "any")) {
+	# OpenSIPS 3.6 API: check_source_address(group [, context_info_pvar] [, pattern] [, partition])
+	# DO NOT pass $sp/"any" — that is the old 1.x/2.x signature and breaks ACL matching.
+	if (check_source_address(1, $avp(os_addr_ctx))) {
 		if (is_present_hf("Proxy-Authorization") || is_present_hf("Authorization")) {
 			if (proxy_authorize("", "subscriber")) {
 				$avp(os_auth_user) = $au;
@@ -264,10 +265,15 @@ route {
 				xlog("L_WARN", "IP ACL ok but INVITE digest failed user=$fU from=$si (AVPs may be empty)\n");
 			}
 		} else {
+			# ViciDial / IP peers: no digest — map address.context_info "sip:user" → billing src.
+			# (auth_db load_credentials only runs on proxy_authorize; defaults apply for media/CID.)
+			if ($avp(os_addr_ctx) != NULL && $(avp(os_addr_ctx){s.len}) > 4) {
+				$avp(os_auth_user) = $(avp(os_addr_ctx){s.select,1,:});
+			}
 			xlog("L_INFO", "IP ACL peer (no digest) from=$si user=$fU ctx=$avp(os_addr_ctx)\n");
 		}
 	} else {
-		if (check_source_address(2)) {
+		if (check_source_address(2, $avp(os_carrier_ctx))) {
 			@@OPENSIPS_ALIAS_LOOKUP@@
 			if (lookup("location")) {
 				route(inbound_from_carrier_deliver);
