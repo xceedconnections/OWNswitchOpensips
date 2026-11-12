@@ -272,7 +272,7 @@ final class SipUserController extends CrudController
                 'type' => 'textarea',
                 'rows' => 4,
                 'wide' => true,
-                'help' => 'One rule per line: FROM=TO. If the dialled number starts with FROM, that prefix is replaced with TO before rating, CDR, and vendor. Example: 2=12 turns 2138007447 into 12138007447. Longest match wins. Leave empty for no change.',
+                'help' => 'One rule per line: FROM=TO. Applied before tariff check, CDR, and vendor. Example: 2=12 turns 2138007447 into 12138007447 (matches plan tariff code 1). Do NOT add 3=13, 4=14, … for every digit — that forces a leading 1 on all dials so every call matches tariff 1. Leave empty to require the customer to dial a number that already matches the plan tariff (e.g. starts with 1). Longest FROM wins.',
                 'section' => 'CLI and dial format',
             ],
             [
