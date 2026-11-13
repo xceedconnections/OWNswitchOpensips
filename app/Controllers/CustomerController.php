@@ -191,29 +191,20 @@ final class CustomerController extends CrudController
     }
 
     /**
-     * Create one Dynamic sip_accounts row matching portal username/password.
-     * Skips (with flash) if username is already taken — does not touch existing REGED peers.
+     * Create one Dynamic sip_accounts row with minimum defaults (same username/password as portal).
+     * Picks a free username if the preferred id is taken. Does not modify existing SIP peers.
      */
     private function createDefaultSipAccount(int $customerId, string $name, string $plainPassword, string $customerStatus): ?string
     {
-        $username = $this->sipUsernameFromPortalName($name, $customerId);
-        if ($username === '') {
+        $base = $this->sipUsernameFromPortalName($name, $customerId);
+        if ($base === '') {
             App::session()->flash('warning', 'User saved, but SIP user was not auto-created (invalid username). Add one under SIP Users.');
             return null;
         }
         $domain = (string) App::config('app.integrations.opensips.sip_domain', 'sip.example.test');
-        try {
-            $st = $this->db()->prepare('SELECT id FROM sip_accounts WHERE username = ? AND domain = ? LIMIT 1');
-            $st->execute([$username, $domain]);
-            if ($st->fetchColumn()) {
-                App::session()->flash(
-                    'warning',
-                    "User saved. SIP username “{$username}” already exists — open SIP Users to add another peer manually."
-                );
-                return null;
-            }
-        } catch (\Throwable $e) {
-            error_log('[ownswitch] auto SIP lookup: ' . $e->getMessage());
+        $username = $this->allocateSipUsername($base, $domain, $customerId);
+        if ($username === '') {
+            App::session()->flash('warning', 'User saved, but no free SIP username was available. Add one under SIP Users.');
             return null;
         }
 
@@ -225,21 +216,29 @@ final class CustomerController extends CrudController
             return null;
         }
 
-        $sipStatus = in_array($customerStatus, ['active'], true) ? 'active' : 'disabled';
+        $sipStatus = $customerStatus === 'active' ? 'active' : 'disabled';
         $codecs = SipCodecs::defaultStorage($this->db());
+
+        // Minimum Dynamic SIP peer — backtick `qualify` (MySQL reserved). Other NOT NULL cols use table defaults.
         try {
             $this->db()->prepare(
                 "INSERT INTO sip_accounts
                     (customer_id, username, domain, ha1, ha1b, password_enc, password_changed_at,
-                     sip_host, connection_mode, sip_port, codecs, qualify, dtmfmode, dtmf_pass,
-                     max_channels, max_cps, max_call_duration, status)
+                     sip_host, connection_mode, sip_port, codecs, `qualify`, dtmfmode, dtmf_pass,
+                     max_channels, max_cps, max_call_duration, caller_id_mode, dst_format, media_policy, status)
                  VALUES
-                    (?,?,?,?,?,?,UTC_TIMESTAMP(),'dynamic','dynamic',5060,?,'no','RFC2833','yes',2,1,0,?)"
+                    (?,?,?,?,?,?,UTC_TIMESTAMP(),
+                     'dynamic','dynamic',5060,?,'no','RFC2833','yes',
+                     2,1,0,'passthrough','as_is','relay',?)"
             )->execute([$customerId, $username, $domain, $ha1, $ha1b, $enc, $codecs, $sipStatus]);
             $sipId = (int) $this->db()->lastInsertId();
         } catch (\Throwable $e) {
             error_log('[ownswitch] auto SIP insert: ' . $e->getMessage());
-            App::session()->flash('warning', 'User saved, but SIP user insert failed. Add one under SIP Users.');
+            App::session()->flash(
+                'warning',
+                'User saved, but SIP user insert failed: ' . mb_substr($e->getMessage(), 0, 180)
+                . ' Add one under SIP Users.'
+            );
             return null;
         }
 
@@ -254,7 +253,13 @@ final class CustomerController extends CrudController
                     'status' => 'active',
                     'connection_mode' => 'dynamic',
                     'sip_host' => 'dynamic',
+                    'sip_port' => 5060,
                     'max_channels' => 2,
+                    'max_cps' => 1,
+                    'caller_id_mode' => 'passthrough',
+                    'dtmf_pass' => 'yes',
+                    'dst_format' => 'as_is',
+                    'media_policy' => 'relay',
                     'codecs' => $codecs,
                     '_plain_password' => $plainPassword,
                     '_effective_media' => 'relay',
@@ -268,7 +273,8 @@ final class CustomerController extends CrudController
             }
         }
 
-        return "Dynamic SIP user “{$username}” created (id {$sipId}) with the same password — edit under SIP Users anytime.";
+        $note = $username !== $base ? " (preferred “{$base}” was taken)" : '';
+        return "Dynamic SIP user “{$username}”{$note} created (id {$sipId}) with the same password — edit under SIP Users anytime.";
     }
 
     /** Map portal Username → SIP id (A-Za-z0-9._- , 3–64). */
@@ -288,6 +294,43 @@ final class CustomerController extends CrudController
             $base = 'user' . $customerId;
         }
         return $base;
+    }
+
+    /** Prefer $base; if taken, try base_id / base_2 … */
+    private function allocateSipUsername(string $base, string $domain, int $customerId): string
+    {
+        $candidates = [$base, $base . '_' . $customerId];
+        for ($i = 2; $i <= 50; $i++) {
+            $suffix = '_' . $i;
+            $trim = 64 - strlen($suffix);
+            if ($trim < 3) {
+                break;
+            }
+            $candidates[] = substr($base, 0, $trim) . $suffix;
+        }
+        foreach ($candidates as $u) {
+            if (!preg_match('/^[A-Za-z0-9._-]{3,64}$/', $u)) {
+                continue;
+            }
+            try {
+                $st = $this->db()->prepare(
+                    'SELECT id FROM sip_accounts WHERE username = ? AND domain = ? LIMIT 1'
+                );
+                $st->execute([$u, $domain]);
+                if (!$st->fetchColumn()) {
+                    // Also avoid username-only collisions when schema has UNIQUE(username)
+                    $st2 = $this->db()->prepare('SELECT id FROM sip_accounts WHERE username = ? LIMIT 1');
+                    $st2->execute([$u]);
+                    if (!$st2->fetchColumn()) {
+                        return $u;
+                    }
+                }
+            } catch (\Throwable $e) {
+                error_log('[ownswitch] auto SIP username allocate: ' . $e->getMessage());
+                return '';
+            }
+        }
+        return '';
     }
 
     protected function beforeDelete(Request $r, array $row): ?string
