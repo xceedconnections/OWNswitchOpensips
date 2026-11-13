@@ -295,6 +295,9 @@ route {
 		consume_credentials();
 	}
 
+	# IP-auth peers: no digest → load dncid/cid/media/allow from portal before gates
+	route(load_sip_profile);
+
 	# Disabled SIP / prepaid empty balance → Payment Required (before ACC / dialog — no CDR)
 	if ($avp(os_allow) != NULL && $(avp(os_allow){s.int}) == 0) {
 		xlog("L_WARN", "Payment Required user=$au from=$si\n");
@@ -339,6 +342,10 @@ route {
 	create_dialog("BPp");
 	# Prefer digest auth user — $fU may be presented CallerID (ViciDial)
 	route(resolve_os_src);
+	# IP-auth peers skip digest → fill dncid / cid_mode / media from portal
+	route(load_sip_profile);
+	# Keep customer-dialled digits (pre-rewrite) for logs; rating/DNC use rewritten
+	$dlg_val(os_dst_raw) = $rU;
 	# SIP-user destination prefix replace (2=12 → 213… becomes 1213…) BEFORE rate/CDR/vendor
 	route(apply_sip_dst_rewrite);
 	$dlg_val(os_dst) = $rU;
@@ -401,18 +408,19 @@ route {
 		exit;
 	}
 
-	# Trunk DNC uses dialled digits ($dlg_val(os_dst)) — before strip
+	# Trunk DNC uses rewritten dialled digits ($dlg_val(os_dst)) — before strip
 	route(check_dnc);
 	route(apply_ruri_strip);
 	route(apply_sip_cid);
 	route(apply_callerid_group);
 	route(check_cid_len);
-	route(check_cli_restriction);
 	route(apply_trunk_attrs);
 	route(check_trunk_cid_len);
 	route(check_rate_cap);
 	# Trunk Channels + CPS — on exceed try next gw in this trunk group
 	route(check_trunk_limits);
+	# CLI restrict after CAP/limits (still before vendor INVITE)
+	route(check_cli_restriction);
 	route(apply_sip_dst_format);
 	route(apply_trunk_dst_format);
 	route(store_delayed_bye);
@@ -880,10 +888,13 @@ route[check_cid_len] {
 # CallerID group: longest dialled-prefix match + rotation; else random (bin/dial-callerid-pick.php)
 @@OPENSIPS_CALLERID_ROUTE@@
 
+# IP-auth SIP profile (dncid/cid/media) when digest load_credentials did not run
+@@OPENSIPS_SIP_PROFILE_ROUTE@@
+
 # CLI Restriction lists (Settings → CLI Restriction) — block presented CLI with 403
 @@OPENSIPS_CLI_RESTRICT_ROUTE@@
 
-# DNC: trunk attrs dncid=N → Redis SISMEMBER or indexed MySQL dnc_cache (never PHP exec)
+# DNC: Redis SISMEMBER → sqlops dnc_cache → PHP dial-dnc-check.php
 @@OPENSIPS_DNC_ROUTE@@
 
 # SIP-user destination format (subscriber.dst_format via load_credentials): plus | digits | as_is
@@ -1018,16 +1029,16 @@ failure_route[carrier_failover] {
 		route(check_dnc);
 		route(apply_ruri_strip);
 		route(apply_sip_cid);
+		route(apply_callerid_group);
 		route(check_cid_len);
-		route(check_cli_restriction);
 		route(apply_trunk_attrs);
 		route(check_trunk_cid_len);
 		route(check_rate_cap);
 		route(check_trunk_limits);
+		route(check_cli_restriction);
 		route(apply_sip_dst_format);
 		route(apply_trunk_dst_format);
 		route(store_delayed_bye);
-		route(apply_callerid_group);
 		route(acc_cli_gw);
 		t_on_failure("carrier_failover");
 		t_relay();

@@ -314,20 +314,12 @@ mysql_root "${DB_OPENSIPS}" -e \
     PRIMARY KEY (group_id, number_digits)
   ) ENGINE=InnoDB DEFAULT CHARSET=latin1" 2>/dev/null || true
 
-if [[ -z "${OPENSIPS_DNC_MODULES:-}" && -z "${OPENSIPS_DNC_ROUTE:-}" ]]; then
-  if (( HAVE_CACHEDB_REDIS )); then
-    _redis_pw="$(get_secret redis_password 2>/dev/null || true)"
-    _redis_db="${REDIS_PORTAL_DB:-1}"
-    if [[ -n "${_redis_pw}" ]]; then
-      _redis_enc="$(P="${_redis_pw}" python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["P"], safe=""))')"
-      _redis_url="redis://:${_redis_enc}@127.0.0.1:6379/${_redis_db}"
-    else
-      _redis_url="redis://127.0.0.1:6379/${_redis_db}"
-    fi
-    export OPENSIPS_DNC_MODULES="loadmodule \"cachedb_redis.so\"
-modparam(\"cachedb_redis\", \"cachedb_url\", \"redis:dnc=>${_redis_url}\")"
-    export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
-	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
+_dnc_php="$(command -v php || echo /usr/bin/php)"
+_dnc_script="/opt/ownswitch/current/bin/dial-dnc-check.php"
+[[ -f "${_dnc_script}" ]] || _dnc_script="/opt/ownswitch-src/bin/dial-dnc-check.php"
+
+# Shared DNC body helpers (digits from rewritten $rU / os_dst)
+_dnc_sip_body_redis='	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
 		return;
 	}
 	$var(dncid) = $avp(os_dncid);
@@ -357,10 +349,9 @@ modparam(\"cachedb_redis\", \"cachedb_url\", \"redis:dnc=>${_redis_url}\")"
 			send_reply(403, "Do Not Call");
 			exit;
 		}
-	}
-}
-route[check_dnc] {
-	if ($avp(dr_gw_attrs) == NULL) {
+	}'
+
+_dnc_trunk_body_redis='	if ($avp(dr_gw_attrs) == NULL) {
 		return;
 	}
 	$var(dncid) = $(avp(dr_gw_attrs){param.value,dncid});
@@ -396,9 +387,143 @@ route[check_dnc] {
 			send_reply(403, "Do Not Call");
 			exit;
 		}
+	}'
+
+if [[ -z "${OPENSIPS_DNC_MODULES:-}" && -z "${OPENSIPS_DNC_ROUTE:-}" ]]; then
+  if (( HAVE_CACHEDB_REDIS )); then
+    _redis_pw="$(get_secret redis_password 2>/dev/null || true)"
+    _redis_db="${REDIS_PORTAL_DB:-1}"
+    if [[ -n "${_redis_pw}" ]]; then
+      _redis_enc="$(P="${_redis_pw}" python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["P"], safe=""))')"
+      _redis_url="redis://:${_redis_enc}@127.0.0.1:6379/${_redis_db}"
+    else
+      _redis_url="redis://127.0.0.1:6379/${_redis_db}"
+    fi
+    export OPENSIPS_DNC_MODULES="loadmodule \"cachedb_redis.so\"
+modparam(\"cachedb_redis\", \"cachedb_url\", \"redis:dnc=>${_redis_url}\")"
+    export OPENSIPS_DNC_ROUTE="route[check_sip_dnc] {
+${_dnc_sip_body_redis}
+}
+route[check_dnc] {
+${_dnc_trunk_body_redis}
+}"
+    log_info "DNC: Redis SISMEMBER path enabled (cachedb_redis)"
+  elif (( HAVE_SQLOPS )); then
+    export OPENSIPS_DNC_MODULES="loadmodule \"sqlops.so\"
+modparam(\"sqlops\", \"db_url\", \"${OPENSIPS_DB_URL}\")"
+    export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
+	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
+		return;
+	}
+	$var(dncid) = $avp(os_dncid);
+	$var(dnc_dst) = $(rU{re.subst,/[^0-9]//g});
+	if ($(var(dnc_dst){s.len}) < 3) {
+		return;
+	}
+	$avp(dnc_hit) = NULL;
+	if (sql_query("select 1 from dnc_cache where group_id=$var(dncid) and number_digits='\''$var(dnc_dst)'\'' limit 1", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL) {
+		xlog("L_WARN", "SIP DNC hit (sql) group=$var(dncid) dst=$var(dnc_dst)\n");
+		acc_db_request("403 Do Not Call", "acc");
+		send_reply(403, "Do Not Call");
+		exit;
+	}
+	$var(dnc_alt) = NULL;
+	if ($(var(dnc_dst){s.len}) == 11 && $(var(dnc_dst){s.substr,0,1}) == "1") {
+		$var(dnc_alt) = $(var(dnc_dst){s.substr,1,0});
+	} else if ($(var(dnc_dst){s.len}) == 10) {
+		$var(dnc_alt) = "1" + $var(dnc_dst);
+	}
+	if ($var(dnc_alt) != NULL && $(var(dnc_alt){s.len}) >= 3) {
+		$avp(dnc_hit) = NULL;
+		if (sql_query("select 1 from dnc_cache where group_id=$var(dncid) and number_digits='\''$var(dnc_alt)'\'' limit 1", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL) {
+			xlog("L_WARN", "SIP DNC hit (sql NANP) group=$var(dncid) dst=$var(dnc_dst)\n");
+			acc_db_request("403 Do Not Call", "acc");
+			send_reply(403, "Do Not Call");
+			exit;
+		}
+	}
+}
+route[check_dnc] {
+	if ($avp(dr_gw_attrs) == NULL) {
+		return;
+	}
+	$var(dncid) = $(avp(dr_gw_attrs){param.value,dncid});
+	if ($var(dncid) == NULL || $(var(dncid){s.len}) == 0 || $(var(dncid){s.int}) <= 0) {
+		return;
+	}
+	$var(dnc_dst) = $(dlg_val(os_dst){re.subst,/[^0-9]//g});
+	if ($var(dnc_dst) == NULL || $(var(dnc_dst){s.len}) < 3) {
+		$var(dnc_dst) = $(rU{re.subst,/[^0-9]//g});
+	}
+	if ($(var(dnc_dst){s.len}) < 3) {
+		return;
+	}
+	$avp(dnc_hit) = NULL;
+	if (sql_query("select 1 from dnc_cache where group_id=$var(dncid) and number_digits='\''$var(dnc_dst)'\'' limit 1", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL) {
+		xlog("L_WARN", "Trunk DNC hit (sql) group=$var(dncid) dst=$var(dnc_dst)\n");
+		acc_db_request("403 Do Not Call", "acc");
+		send_reply(403, "Do Not Call");
+		exit;
+	}
+	$var(dnc_alt) = NULL;
+	if ($(var(dnc_dst){s.len}) == 11 && $(var(dnc_dst){s.substr,0,1}) == "1") {
+		$var(dnc_alt) = $(var(dnc_dst){s.substr,1,0});
+	} else if ($(var(dnc_dst){s.len}) == 10) {
+		$var(dnc_alt) = "1" + $var(dnc_dst);
+	}
+	if ($var(dnc_alt) != NULL && $(var(dnc_alt){s.len}) >= 3) {
+		$avp(dnc_hit) = NULL;
+		if (sql_query("select 1 from dnc_cache where group_id=$var(dncid) and number_digits='\''$var(dnc_alt)'\'' limit 1", "$avp(dnc_hit)") && $avp(dnc_hit) != NULL) {
+			xlog("L_WARN", "Trunk DNC hit (sql NANP) group=$var(dncid) dst=$var(dnc_dst)\n");
+			acc_db_request("403 Do Not Call", "acc");
+			send_reply(403, "Do Not Call");
+			exit;
+		}
 	}
 }'
-    log_info "DNC: Redis SISMEMBER path enabled (cachedb_redis)"
+    log_info "DNC: sqlops dnc_cache fallback enabled"
+  elif (( HAVE_EXEC )) && [[ -f "${_dnc_script}" ]]; then
+    export OPENSIPS_DNC_MODULES='# DNC via PHP exec (no redis/sqlops)'
+    export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
+	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
+		return;
+	}
+	$var(dncid) = $avp(os_dncid);
+	$var(dnc_dst) = $(rU{re.subst,/[^0-9]//g});
+	if ($(var(dnc_dst){s.len}) < 3) {
+		return;
+	}
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_dnc_php}"' '"${_dnc_script}"' $var(dncid) $var(dnc_dst)")) {
+		xlog("L_WARN", "SIP DNC hit (php) group=$var(dncid) dst=$var(dnc_dst)\n");
+		acc_db_request("403 Do Not Call", "acc");
+		send_reply(403, "Do Not Call");
+		exit;
+	}
+}
+route[check_dnc] {
+	if ($avp(dr_gw_attrs) == NULL) {
+		return;
+	}
+	$var(dncid) = $(avp(dr_gw_attrs){param.value,dncid});
+	if ($var(dncid) == NULL || $(var(dncid){s.len}) == 0 || $(var(dncid){s.int}) <= 0) {
+		return;
+	}
+	$var(dnc_dst) = $(dlg_val(os_dst){re.subst,/[^0-9]//g});
+	if ($var(dnc_dst) == NULL || $(var(dnc_dst){s.len}) < 3) {
+		$var(dnc_dst) = $(rU{re.subst,/[^0-9]//g});
+	}
+	if ($(var(dnc_dst){s.len}) < 3) {
+		return;
+	}
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_dnc_php}"' '"${_dnc_script}"' $var(dncid) $var(dnc_dst)")) {
+		xlog("L_WARN", "Trunk DNC hit (php) group=$var(dncid) dst=$var(dnc_dst)\n");
+		acc_db_request("403 Do Not Call", "acc");
+		send_reply(403, "Do Not Call");
+		exit;
+	}
+}'
+    chmod 644 "${_dnc_script}" 2>/dev/null || true
+    log_info "DNC: PHP exec fallback → ${_dnc_script}"
   else
     export OPENSIPS_DNC_MODULES="${OPENSIPS_DNC_MODULES:-}"
     export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
@@ -407,12 +532,106 @@ route[check_dnc] {
 route[check_dnc] {
 	return;
 }'
-    log_warn "DNC: cachedb_redis missing — stubs only (install opensips redis module)"
+    log_warn "DNC: no redis/sqlops/exec — stubs only"
+  fi
+fi
+
+# Load SIP profile for IP-auth peers (no digest → load_credentials skipped)
+_rate_php="$(command -v php || echo /usr/bin/php)"
+if [[ -z "${OPENSIPS_SIP_PROFILE_ROUTE:-}" ]]; then
+  _prof_script="/opt/ownswitch/current/bin/dial-sip-profile.php"
+  [[ -f "${_prof_script}" ]] || _prof_script="/opt/ownswitch-src/bin/dial-sip-profile.php"
+  if (( HAVE_EXEC )) && [[ -f "${_prof_script}" ]]; then
+    export OPENSIPS_SIP_PROFILE_ROUTE='route[load_sip_profile] {
+	$var(prof_user) = $avp(os_auth_user);
+	if ($var(prof_user) == NULL || $(var(prof_user){s.len}) == 0) {
+		$var(prof_user) = $dlg_val(os_src);
+	}
+	if ($var(prof_user) == NULL || $(var(prof_user){s.len}) == 0) {
+		$var(prof_user) = $au;
+	}
+	if ($var(prof_user) == NULL || $(var(prof_user){s.len}) == 0) {
+		return;
+	}
+	# Only fill missing AVPs (digest path already has load_credentials)
+	if ($avp(os_dncid) != NULL && $(avp(os_dncid){s.len}) > 0
+		&& $avp(os_cid_mode) != NULL && $(avp(os_cid_mode){s.len}) > 0) {
+		return;
+	}
+	$var(prof_out) = NULL;
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_prof_script}"' $var(prof_user)", , $var(prof_out))) {
+		return;
+	}
+	if ($var(prof_out) == NULL || $(var(prof_out){s.len}) < 5) {
+		return;
+	}
+	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.len}) == 0 || $(avp(os_dncid){s.int}) <= 0) {
+		$var(p_dnc) = $(var(prof_out){param.value,dncid});
+		if ($var(p_dnc) != NULL && $(var(p_dnc){s.len}) > 0) {
+			$avp(os_dncid) = $var(p_dnc);
+		}
+	}
+	if ($avp(os_cid_mode) == NULL || $(avp(os_cid_mode){s.len}) == 0) {
+		$var(p_mode) = $(var(prof_out){param.value,cid_mode});
+		if ($var(p_mode) != NULL && $(var(p_mode){s.len}) > 0) {
+			$avp(os_cid_mode) = $var(p_mode);
+		}
+	}
+	if ($avp(os_cid) == NULL || $(avp(os_cid){s.len}) == 0) {
+		$var(p_cid) = $(var(prof_out){param.value,cid});
+		if ($var(p_cid) != NULL && $(var(p_cid){s.len}) > 0) {
+			$avp(os_cid) = $var(p_cid);
+		}
+	}
+	if ($avp(os_media) == NULL || $(avp(os_media){s.len}) == 0) {
+		$var(p_media) = $(var(prof_out){param.value,media});
+		if ($var(p_media) != NULL && $(var(p_media){s.len}) > 0) {
+			$avp(os_media) = $var(p_media);
+		}
+	}
+	if ($avp(os_dtmf) == NULL || $(avp(os_dtmf){s.len}) == 0) {
+		$var(p_dtmf) = $(var(prof_out){param.value,dtmf});
+		if ($var(p_dtmf) != NULL && $(var(p_dtmf){s.len}) > 0) {
+			$avp(os_dtmf) = $var(p_dtmf);
+		}
+	}
+	if ($avp(os_dstfmt) == NULL || $(avp(os_dstfmt){s.len}) == 0) {
+		$var(p_fmt) = $(var(prof_out){param.value,dstfmt});
+		if ($var(p_fmt) != NULL && $(var(p_fmt){s.len}) > 0) {
+			$avp(os_dstfmt) = $var(p_fmt);
+		}
+	}
+	if ($avp(os_cid_min) == NULL || $(avp(os_cid_min){s.len}) == 0) {
+		$var(p_min) = $(var(prof_out){param.value,cidmin});
+		if ($var(p_min) != NULL && $(var(p_min){s.len}) > 0) {
+			$avp(os_cid_min) = $var(p_min);
+		}
+	}
+	if ($avp(os_cid_max) == NULL || $(avp(os_cid_max){s.len}) == 0) {
+		$var(p_max) = $(var(prof_out){param.value,cidmax});
+		if ($var(p_max) != NULL && $(var(p_max){s.len}) > 0) {
+			$avp(os_cid_max) = $var(p_max);
+		}
+	}
+	if ($avp(os_allow) == NULL || $(avp(os_allow){s.len}) == 0) {
+		$var(p_allow) = $(var(prof_out){param.value,allow});
+		if ($var(p_allow) != NULL && $(var(p_allow){s.len}) > 0) {
+			$avp(os_allow) = $var(p_allow);
+		}
+	}
+	xlog("L_INFO", "SIP profile loaded user=$var(prof_user) dncid=$avp(os_dncid) cid_mode=$avp(os_cid_mode)\n");
+}'
+    chmod 644 "${_prof_script}" 2>/dev/null || true
+    log_info "SIP profile: exec → ${_prof_script}"
+  else
+    export OPENSIPS_SIP_PROFILE_ROUTE='route[load_sip_profile] {
+	return;
+}'
+    log_warn "SIP profile: exec/dial-sip-profile missing — stub only"
   fi
 fi
 
 # SIP-user destination prefix rewrite (exec → bin/dial-dst-rewrite.php)
-_rate_php="$(command -v php || echo /usr/bin/php)"
 if [[ -z "${OPENSIPS_DST_REWRITE_ROUTE:-}" ]]; then
   _rw_script="/opt/ownswitch/current/bin/dial-dst-rewrite.php"
   [[ -f "${_rw_script}" ]] || _rw_script="/opt/ownswitch-src/bin/dial-dst-rewrite.php"
@@ -560,7 +779,6 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 			route(apply_sip_cid);
 			route(apply_callerid_group);
 			route(check_cid_len);
-			route(check_cli_restriction);
 			route(apply_trunk_attrs);
 			route(check_trunk_cid_len);
 			route(check_rate_cap);
@@ -696,14 +914,15 @@ if [[ -z "${OPENSIPS_TRUNK_LIMIT_ROUTE:-}" ]]; then
 			route(check_dnc);
 			route(apply_ruri_strip);
 			route(apply_sip_cid);
+			route(apply_callerid_group);
 			route(check_cid_len);
-			route(check_cli_restriction);
 			route(apply_trunk_attrs);
 			route(check_trunk_cid_len);
 			route(check_rate_cap);
 			route(check_trunk_limits);
 			return;
 		}
+		acc_db_request("503 Congestion", "acc");
 		send_reply(503, "Congestion");
 		exit;
 	}
@@ -807,7 +1026,10 @@ log_info "OpenSIPS DEFAULT_MEDIA_POLICY=${DEFAULT_MEDIA_POLICY}"
 : "${OPENSIPS_CALLERID_ROUTE:=route[apply_callerid_group] {
 	return;
 }}"
-export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE OPENSIPS_CALLERID_ROUTE
+: "${OPENSIPS_SIP_PROFILE_ROUTE:=route[load_sip_profile] {
+	return;
+}}"
+export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE OPENSIPS_CALLERID_ROUTE OPENSIPS_SIP_PROFILE_ROUTE
 
 # ---------------------------------------------------------------------------
 # 6. Render + validate + activate cfg
