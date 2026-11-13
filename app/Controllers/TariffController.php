@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Ownswitch\Controllers;
 
+use Ownswitch\App;
 use Ownswitch\Http\Request;
 use Ownswitch\Http\Response;
 use Ownswitch\Repositories\BaseRepository;
 use Ownswitch\Repositories\PrefixRepository;
 use Ownswitch\Repositories\RatePlanRepository;
 use Ownswitch\Repositories\TariffRepository;
+use Ownswitch\Services\Routing\OpensipsRoutingSync;
 
 /**
  * Magnus Tariffs / Provider Rates field set.
@@ -201,6 +203,18 @@ final class TariffController extends CrudController
             $row = $this->repo()->findInternal($id);
             if ($row) {
                 (new RatePlanRepository($this->db()))->createVersion((int) $row['rate_plan_id'], (int) ($this->user($r)['id'] ?? 0) ?: null);
+            }
+            // Tariff trunk-group changes must land in OpenSIPS drouting automatically.
+            $prevTg = (int) ($existing['routing_plan_id'] ?? 0);
+            $newTg = (int) ((is_array($row) ? ($row['routing_plan_id'] ?? null) : null) ?? ($data['routing_plan_id'] ?? 0));
+            if ($newTg > 0 || $prevTg !== $newTg) {
+                $sync = OpensipsRoutingSync::pushNow($this->db());
+                if ($sync['warnings'] !== []) {
+                    App::session()->flash(
+                        'warning',
+                        'Tariff saved, but route sync warning: ' . mb_substr(implode(' | ', $sync['warnings']), 0, 240)
+                    );
+                }
             }
         }
         return null;

@@ -700,13 +700,15 @@ if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
 		send_reply(403, "Unrated Destination");
 		exit;
 	}
-	# Parse trunk-group id + optional plan-prefix-stripped route digits
+	# Parse trunk-group id + optional plan-prefix-stripped route digits.
+	# Use /s so trailing newline from PHP fwrite is consumed — otherwise rp becomes "3\\n"
+	# and =~ "^[0-9]+$" fails → tg stays 0 → false "no trunk group" while dial-rate-check is OK.
 	if ($var(rate_out) != NULL && $(var(rate_out){s.len}) > 0) {
-		$var(rp) = $(var(rate_out){re.subst,/.*rplan=([0-9]+).*/\1/});
+		$var(rp) = $(var(rate_out){re.subst,/^.*rplan=([0-9]+).*$/\1/s});
 		if ($var(rp) != NULL && $(var(rp){s.len}) > 0 && $var(rp) =~ "^[0-9]+$") {
-			$avp(os_rplan) = $var(rp);
+			$avp(os_rplan) = $(var(rp){s.int});
 		}
-		$var(rd) = $(var(rate_out){re.subst,/.*route_dst=([0-9]+).*/\1/});
+		$var(rd) = $(var(rate_out){re.subst,/^.*route_dst=([0-9]+).*$/\1/s});
 		if ($var(rd) != NULL && $(var(rd){s.len}) >= 3 && $var(rd) =~ "^[0-9]+$" && $var(rd) != $rU) {
 			xlog("L_INFO", "plan-prefix strip user=$var(rate_user) from=$rU to=$var(rd) tg=$avp(os_rplan)\n");
 			$rU = $var(rd);

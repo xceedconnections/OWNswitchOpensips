@@ -17,6 +17,26 @@ final class OpensipsRoutingSync
     {
     }
 
+    /**
+     * Push trunks + routing rules into OpenSIPS (call after TG / trunk / SIP TG assignment changes).
+     *
+     * @return array{trunks:int,rules:int,warnings:list<string>}
+     */
+    public static function pushNow(?PDO $own = null, ?OpensipsProvisioner $prov = null): array
+    {
+        try {
+            $prov ??= OpensipsProvisioner::fromConfig();
+            if (!$prov->enabled()) {
+                return ['trunks' => 0, 'rules' => 0, 'warnings' => ['OpenSIPS is not configured']];
+            }
+            $own ??= \Ownswitch\App::db();
+            return (new self($own, $prov))->syncAll();
+        } catch (\Throwable $e) {
+            error_log('[ownswitch] OpensipsRoutingSync::pushNow: ' . $e->getMessage());
+            return ['trunks' => 0, 'rules' => 0, 'warnings' => [$e->getMessage()]];
+        }
+    }
+
     /** @return array{trunks:int,rules:int,warnings:list<string>} */
     public function syncAll(): array
     {

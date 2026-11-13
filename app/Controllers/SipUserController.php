@@ -10,6 +10,7 @@ use Ownswitch\Integrations\OpenSIPS\OpensipsProvisioner;
 use Ownswitch\Repositories\BaseRepository;
 use Ownswitch\Repositories\SipAccountRepository;
 use Ownswitch\Services\Dnc\DncService;
+use Ownswitch\Services\Routing\OpensipsRoutingSync;
 use Ownswitch\Services\Sip\SipOptionsProbe;
 use Ownswitch\Services\StirShaken\StirShakenCertificateService;
 use Ownswitch\Support\Crypto;
@@ -929,6 +930,19 @@ final class SipUserController extends CrudController
             } catch (\Throwable $e) {
                 error_log('[ownswitch] SIP peer firewall: ' . $e->getMessage());
                 App::session()->flash('warning', 'SIP saved, but firewall update failed.');
+            }
+
+            // Keep OpenSIPS drouting in sync whenever trunk group is set/changed on a SIP user.
+            $prevTg = (int) ($existing['routing_plan_id'] ?? 0);
+            $newTg = (int) ($row['routing_plan_id'] ?? 0);
+            if ($newTg > 0 || $prevTg !== $newTg) {
+                $sync = OpensipsRoutingSync::pushNow($this->db(), $prov->enabled() ? $prov : null);
+                if ($sync['warnings'] !== []) {
+                    App::session()->flash(
+                        'warning',
+                        'SIP saved, but route sync warning: ' . mb_substr(implode(' | ', $sync['warnings']), 0, 240)
+                    );
+                }
             }
         }
         if ($this->plainPassword !== null && $row && $connMode === 'dynamic') {

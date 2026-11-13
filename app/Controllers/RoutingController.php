@@ -398,14 +398,15 @@ final class RoutingController extends CrudController
 
     private function pushRoutes(): void
     {
-        $prov = OpensipsProvisioner::fromConfig();
-        if (!$prov->enabled()) {
-            return;
-        }
-        try {
-            (new OpensipsRoutingSync($this->db(), $prov))->syncAll();
-        } catch (\Throwable $e) {
-            App::session()->flash('warning', 'Saved, but OpenSIPS gateway sync failed: ' . (App::config('app.debug') ? $e->getMessage() : 'run php bin/sync-opensips-trunks.php'));
+        $sync = OpensipsRoutingSync::pushNow($this->db());
+        if ($sync['warnings'] !== []) {
+            App::session()->flash(
+                'warning',
+                'Saved, but OpenSIPS gateway sync failed: '
+                . (App::config('app.debug')
+                    ? implode(' | ', $sync['warnings'])
+                    : 'run php bin/sync-opensips-trunks.php')
+            );
         }
     }
 
