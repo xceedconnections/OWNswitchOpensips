@@ -221,6 +221,10 @@ final class CallsOnlineController extends BaseController
                     continue;
                 }
                 $n = self::normalize($d);
+                // Belt-and-suspenders: never paint Ending / state-5 leftovers as Connected
+                if (self::isDeadNormalized($n, $d)) {
+                    continue;
+                }
                 if ($n['callid'] === '') {
                     continue;
                 }
@@ -392,7 +396,16 @@ final class CallsOnlineController extends BaseController
     {
         $stateRaw = $d['state'] ?? $d['State'] ?? $d['dialog_state'] ?? $d['dlg_state'] ?? $d['status'] ?? $d['dlgstate'] ?? '';
         if (is_int($stateRaw) || (is_string($stateRaw) && ctype_digit(trim($stateRaw)))) {
-            return (int) $stateRaw === 5;
+            $n = (int) $stateRaw;
+            // 5=deleted; also drop unknown high states
+            if ($n === 5 || $n > 5) {
+                return true;
+            }
+        }
+        // timeout=0 after terminate (delete_delay read-only leftovers)
+        if (array_key_exists('timeout', $d) && is_numeric($d['timeout']) && (int) $d['timeout'] === 0
+            && array_key_exists('state', $d) && is_numeric($d['state']) && (int) $d['state'] === 5) {
+            return true;
         }
         $s = strtoupper(trim((string) $stateRaw));
         if ($s === '') {
@@ -403,6 +416,37 @@ final class CallsOnlineController extends BaseController
         }
         return str_contains($s, 'DELETE') || str_contains($s, 'DEAD')
             || preg_match('/\bENDING\b/', $s) || preg_match('/\bENDED\b/', $s);
+    }
+
+    /**
+     * Extra filters after normalize — Vicidial BYE tag-mismatch leaves state-5 / empty-callee ghosts.
+     *
+     * @param array<string,mixed> $n
+     * @param array<string,mixed> $d
+     */
+    private static function isDeadNormalized(array $n, array $d): bool
+    {
+        if (($n['bucket'] ?? '') === 'other' && strcasecmp((string) ($n['state'] ?? ''), 'Ending') === 0) {
+            return true;
+        }
+        $raw = $n['state_raw'] ?? '';
+        if (is_numeric($raw) && (int) $raw === 5) {
+            return true;
+        }
+        // Confirmed-looking row but no callee contact and no to-tag → never answered / already torn down
+        $callees = $d['CALLEES'] ?? $d['callees'] ?? null;
+        $calleeContact = '';
+        if (is_array($callees) && $callees !== []) {
+            $first = $callees[0] ?? null;
+            if (is_array($first)) {
+                $calleeContact = trim((string) ($first['callee_contact'] ?? $first['contact'] ?? ''));
+            }
+        }
+        $toTag = trim((string) ($d['to_tag'] ?? $d['callee_tag'] ?? ''));
+        if ($calleeContact === '' && $toTag === '' && ($n['bucket'] ?? '') === 'connected' && (int) ($n['duration'] ?? 0) > 30) {
+            return true;
+        }
+        return false;
     }
 
     /** Best-effort caller signalling IP from dialog MI / DB shapes. */

@@ -107,13 +107,13 @@ modparam("dialog", "db_mode", 2)
 # hard cap on call length (seconds) - safety net for billing
 modparam("dialog", "default_timeout", 7200)
 # Detect dead legs (ViciDial hangup without BYE reaching us) and clear zombie "Connected" dialogs
-modparam("dialog", "options_ping_interval", 15)
+modparam("dialog", "options_ping_interval", 10)
 # Re-INVITE ping: Asterisk often 200-OKs OPTIONS after hangup; missing re-INVITE drops the dialog
-modparam("dialog", "reinvite_ping_interval", 30)
-modparam("dialog", "delete_delay", 5)
-# 0=DID_ONLY (Call-ID). Strict/spooly tag match fails on Vicidial BYE → ghost Connected rows
-# ("tight matching failed for BYE"). Call-ID-only still ends the dialog when BYE arrives.
-modparam("dialog", "dlg_match_mode", 0)
+modparam("dialog", "reinvite_ping_interval", 20)
+# 0 = drop from MI immediately when terminated (no state-5 ghosts on Calls Online)
+modparam("dialog", "delete_delay", 0)
+# 1=DID_FALLBACK (default). 0=DID_ONLY needs did= in RR; Vicidial BYEs often miss it.
+modparam("dialog", "dlg_match_mode", 1)
 
 # CGRateS SessionS bi-directional JSON-RPC (listen_bijson), loopback only
 loadmodule "cgrates.so"
@@ -216,6 +216,15 @@ route {
 			send_reply(200, "OK");
 			exit;
 		}
+		# Vicidial BYE often fails "tight matching" (tag mismatch) → dialog stays Connected.
+		# Force dialog association, then expire immediately; also MI-end by Call-ID as belt-and-suspenders.
+		if (is_method("BYE")) {
+			match_dialog();
+			if ($DLG_timeout != NULL) {
+				$DLG_timeout = 1;
+			}
+			route(force_dlg_end_bye);
+		}
 		if (loose_route()) {
 			# Delayed Bye: hold customer→carrier BYE so vendor CDR meets MCD + extra
 			if (is_method("BYE")) {
@@ -234,6 +243,12 @@ route {
 				if (t_check_trans()) {
 					t_relay();
 				}
+				exit;
+			}
+			# BYE without loose_route still ends local dialog tracking
+			if (is_method("BYE")) {
+				xlog("L_WARN", "BYE no loose_route ci=$ci from=$si — answered 200, forced dlg end\n");
+				send_reply(200, "OK");
 				exit;
 			}
 			send_reply(404, "Not here");
@@ -448,6 +463,19 @@ route[store_delayed_bye] {
 	}
 	if ($var(dm) != NULL && $(var(dm){s.len}) > 0) {
 		$dlg_val(dmcd) = $var(dm);
+	}
+}
+
+# End dialog even when Vicidial BYE fails tight tag match (otherwise Calls Online stays Connected).
+route[force_dlg_end_bye] {
+	# Always try DID first; always also end by Call-ID (helper) so MI clears the dialog.
+	if ($DLG_did != NULL && $(DLG_did{s.len}) > 0) {
+		xlog("L_WARN", "BYE force dlg_end did=$DLG_did ci=$ci\n");
+		exec("opensips-cli -x mi dlg_end_dlg $DLG_did", "a");
+	}
+	if ($ci != NULL && $(ci{s.len}) > 8) {
+		xlog("L_WARN", "BYE force dlg_end by callid ci=$ci from=$si\n");
+		exec("/usr/local/sbin/os-dlg-end-by-ci '$ci'", "a");
 	}
 }
 

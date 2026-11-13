@@ -1079,6 +1079,11 @@ final class OpensipsProvisioner
             if ($list !== []) {
                 return $list;
             }
+            // dlg_list had only deleted (state 5) / empty-callee ghosts — treat as idle
+            if (is_array($result) && ($result['Dialogs'] ?? $result['dialogs'] ?? null) !== null) {
+                $this->miDialogsEmptyConfirmed = true;
+                return [];
+            }
             // Unparsed non-empty payload — do not claim idle / wipe DB
         }
         return [];
