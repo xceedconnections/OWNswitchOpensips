@@ -47,7 +47,8 @@ loadmodule "signaling.so"
 loadmodule "sl.so"
 
 loadmodule "tm.so"
-modparam("tm", "fr_timeout", 5)
+# 5s was too aggressive under dial-helper exec load → Vicidial saw mass 408 as "congestion"
+modparam("tm", "fr_timeout", 15)
 modparam("tm", "fr_inv_timeout", 60)
 modparam("tm", "restart_fr_on_each_reply", 0)
 modparam("tm", "onreply_avp_mode", 1)

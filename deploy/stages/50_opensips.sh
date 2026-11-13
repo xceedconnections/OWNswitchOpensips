@@ -1065,6 +1065,16 @@ Wants=mysql.service
 Restart=on-failure
 RestartSec=5
 EOF
+# Stock P_MEMORY=4 causes drops/timeouts under Vicidial burst (looks like congestion).
+if [[ -f /etc/default/opensips ]]; then
+  sed -i 's/^P_MEMORY=.*/P_MEMORY=64/' /etc/default/opensips || true
+  sed -i 's/^S_MEMORY=.*/S_MEMORY=256/' /etc/default/opensips || true
+fi
+cat >/etc/systemd/system/opensips.service.d/ownswitch-memory.conf <<'EOF'
+[Service]
+Environment=P_MEMORY=64
+Environment=S_MEMORY=256
+EOF
 systemctl daemon-reload || true
 systemctl enable opensips >/dev/null 2>&1 || true
 # Free port 5060 if something else still holds it (e.g. leftover FreeSWITCH)
