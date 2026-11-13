@@ -38,15 +38,37 @@ final class SipFirewallPolicyService
         }
     }
 
+    /** True when at least one active IP-auth SIP peer is configured. */
+    public function hasIpAuthPeers(): bool
+    {
+        try {
+            $n = (int) $this->db()->query(
+                "SELECT COUNT(*) FROM sip_accounts
+                 WHERE status = 'active'
+                   AND LOWER(COALESCE(connection_mode, '')) = 'ip'"
+            )->fetchColumn();
+            return $n > 0;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     /**
-     * Apply firewall mode + optionally refresh trunk IP allows.
+     * open  = world SIP:5060 (password softphones, or no IP peers yet)
+     * locked = only allow-listed peer/trunk IPs (IP-auth-only installs)
      *
      * @return array{ok:bool,detail:string,mode:string}
      */
     public function ensure(): array
     {
         $fw = new SipPeerFirewallService();
-        $mode = $this->hasPasswordSipUsers() ? 'open' : 'locked';
+        // Lock only when IP peers exist and there are no password users.
+        // Empty DB / no peers must stay open so we never brick 5060.
+        if ($this->hasPasswordSipUsers() || !$this->hasIpAuthPeers()) {
+            $mode = 'open';
+        } else {
+            $mode = 'locked';
+        }
         $res = $fw->ensureSipMode($mode);
         return [
             'ok' => $res['ok'],
