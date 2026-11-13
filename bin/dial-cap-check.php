@@ -3,7 +3,11 @@
 declare(strict_types=1);
 
 /**
- * OpenSIPS exec helper: exit 0 = allow dial, 1 = deny (Rate Cap Exceeded).
+ * OpenSIPS exec helper for Rate CAP.
+ * Always exit 0; stdout tells OpenSIPS what to do:
+ *   ALLOW ...
+ *   DENY_USER ...   → final 403 (do not try next trunk)
+ *   DENY_TRUNK ...  → try next gateway in trunk group
  *
  *   php bin/dial-cap-check.php <sip_username> <destination> <trunk_id>
  */
@@ -34,6 +38,17 @@ if ($res['allow']) {
     exit(0);
 }
 
-fwrite(STDOUT, 'DENY ' . $res['reason'] . "\n");
-fwrite(STDERR, 'DENY ' . $res['reason'] . "\n");
-exit(1);
+$reason = (string) ($res['reason'] ?? 'cap');
+$isUser = str_starts_with($reason, 'User CAP')
+    || str_contains($reason, 'SIP account has no customer')
+    || str_contains($reason, 'no customer tariff');
+
+if ($isUser) {
+    fwrite(STDOUT, 'DENY_USER ' . $reason . "\n");
+    fwrite(STDERR, 'DENY_USER ' . $reason . "\n");
+    exit(0);
+}
+
+fwrite(STDOUT, 'DENY_TRUNK ' . $reason . "\n");
+fwrite(STDERR, 'DENY_TRUNK ' . $reason . "\n");
+exit(0);

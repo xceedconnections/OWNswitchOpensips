@@ -459,6 +459,9 @@ if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
 		$var(rate_user) = $au;
 	}
 	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
+		$var(rate_user) = $dlg_val(os_src);
+	}
+	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
 		$var(rate_user) = $fU;
 	}
 	# Ensure ACC / CDR sees SIP user + (possibly rewritten) destination even on reject
@@ -470,12 +473,29 @@ if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
 		$acc_extra(cli) = $fU;
 	}
 	$acc_extra(ip) = $si;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_rate_script}"' $var(rate_user) $rU")) {
+	$var(rate_out) = NULL;
+	$avp(os_rplan) = 0;
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_rate_script}"' $var(rate_user) $rU", , $var(rate_out))) {
 		xlog("L_WARN", "Unrated Destination user=$var(rate_user) dst=$rU\n");
 		acc_db_request("403 Unrated Destination", "acc");
 		send_reply(403, "Unrated Destination");
 		exit;
 	}
+	# Parse trunk-group id + optional plan-prefix-stripped route digits
+	if ($var(rate_out) != NULL && $(var(rate_out){s.len}) > 0) {
+		$var(rp) = $(var(rate_out){re.subst,/.*rplan=([0-9]+).*/\1/});
+		if ($var(rp) != NULL && $(var(rp){s.len}) > 0 && $var(rp) =~ "^[0-9]+$") {
+			$avp(os_rplan) = $var(rp);
+		}
+		$var(rd) = $(var(rate_out){re.subst,/.*route_dst=([0-9]+).*/\1/});
+		if ($var(rd) != NULL && $(var(rd){s.len}) >= 3 && $var(rd) =~ "^[0-9]+$" && $var(rd) != $rU) {
+			xlog("L_INFO", "plan-prefix strip user=$var(rate_user) from=$rU to=$var(rd) tg=$avp(os_rplan)\n");
+			$rU = $var(rd);
+			$dlg_val(os_dst) = $var(rd);
+			$acc_extra(dst) = $var(rd);
+		}
+	}
+	xlog("L_INFO", "rated OK user=$var(rate_user) dst=$rU tg=$avp(os_rplan)\n");
 }'
     usermod -aG ownswitch opensips 2>/dev/null || true
     chmod 755 "$(dirname "${_rate_script}")" 2>/dev/null || true
@@ -503,20 +523,50 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 	if ($var(tid) == NULL || $(var(tid){s.len}) == 0) {
 		return;
 	}
-	$var(cap_user) = $au;
+	$var(cap_user) = $avp(os_auth_user);
+	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
+		$var(cap_user) = $dlg_val(os_src);
+	}
+	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
+		$var(cap_user) = $au;
+	}
 	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
 		$var(cap_user) = $fU;
 	}
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cap_script}"' $var(cap_user) $rU $var(tid)")) {
-		xlog("L_WARN", "Rate Cap Exceeded user=$var(cap_user) dst=$rU trunk=$var(tid)\n");
+	# Cap against post-rewrite / pre-strip dialled digits when available
+	$var(cap_dst) = $dlg_val(os_dst);
+	if ($var(cap_dst) == NULL || $(var(cap_dst){s.len}) < 3) {
+		$var(cap_dst) = $rU;
+	}
+	$var(cap_out) = NULL;
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cap_script}"' $var(cap_user) $var(cap_dst) $var(tid)", , $var(cap_out))) {
+		$var(cap_out) = "DENY_TRUNK exec_failed";
+	}
+	if ($var(cap_out) =~ "DENY_USER") {
+		xlog("L_WARN", "User Rate Cap Exceeded user=$var(cap_user) dst=$var(cap_dst)\n");
+		acc_db_request("403 Rate Cap Exceeded", "acc");
+		send_reply(403, "Rate Cap Exceeded");
+		exit;
+	}
+	if ($var(cap_out) =~ "DENY_TRUNK") {
+		xlog("L_WARN", "Trunk Rate Cap Exceeded user=$var(cap_user) dst=$var(cap_dst) trunk=$var(tid) — next gw\n");
 		if ($var(cap_tries) == NULL) {
 			$var(cap_tries) = 0;
 		}
 		$var(cap_tries) = $(var(cap_tries){s.int}) + 1;
 		if ($(var(cap_tries){s.int}) < 8 && use_next_gw()) {
+			route(check_dnc);
+			route(apply_ruri_strip);
+			route(apply_sip_cid);
+			route(apply_callerid_group);
+			route(check_cid_len);
+			route(check_cli_restriction);
+			route(apply_trunk_attrs);
+			route(check_trunk_cid_len);
 			route(check_rate_cap);
 			return;
 		}
+		acc_db_request("403 Rate Cap Exceeded", "acc");
 		send_reply(403, "Rate Cap Exceeded");
 		exit;
 	}
@@ -552,6 +602,7 @@ if [[ -z "${OPENSIPS_SIP_LIMIT_ROUTE:-}" ]]; then
 	}
 	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_sip_lim_script}"' $var(lim_user)")) {
 		xlog("L_WARN", "SIP Congestion user=$var(lim_user) from=$si (channels/CPS)\n");
+		acc_db_request("503 Congestion", "acc");
 		send_reply(503, "Congestion");
 		exit;
 	}
@@ -563,6 +614,61 @@ if [[ -z "${OPENSIPS_SIP_LIMIT_ROUTE:-}" ]]; then
 	return;
 }'
     log_warn "SIP limits: exec/dial-sip-limit-check missing — stub only"
+  fi
+fi
+
+# CallerID group picker (exec → bin/dial-callerid-pick.php)
+if [[ -z "${OPENSIPS_CALLERID_ROUTE:-}" ]]; then
+  _cid_script="/opt/ownswitch/current/bin/dial-callerid-pick.php"
+  [[ -f "${_cid_script}" ]] || _cid_script="/opt/ownswitch-src/bin/dial-callerid-pick.php"
+  if (( HAVE_EXEC )) && [[ -f "${_cid_script}" ]]; then
+    export OPENSIPS_CALLERID_ROUTE='route[apply_callerid_group] {
+	$var(cid_user) = $avp(os_auth_user);
+	if ($var(cid_user) == NULL || $(var(cid_user){s.len}) == 0) {
+		$var(cid_user) = $dlg_val(os_src);
+	}
+	if ($var(cid_user) == NULL || $(var(cid_user){s.len}) == 0) {
+		$var(cid_user) = $au;
+	}
+	if ($var(cid_user) == NULL || $(var(cid_user){s.len}) == 0) {
+		return;
+	}
+	$var(cid_dst) = $dlg_val(os_dst);
+	if ($var(cid_dst) == NULL || $(var(cid_dst){s.len}) < 3) {
+		$var(cid_dst) = $rU;
+	}
+	$var(cid_out) = NULL;
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cid_script}"' $var(cid_user) $var(cid_dst)", , $var(cid_out))) {
+		return;
+	}
+	$var(cid_cli) = $(var(cid_out){re.subst,/[^0-9+]//g});
+	if ($var(cid_cli) == NULL || $(var(cid_cli){s.len}) < 3 || $(var(cid_cli){s.len}) > 30) {
+		return;
+	}
+	if (!($var(cid_cli) =~ "^[+0-9]{3,30}$")) {
+		return;
+	}
+	$var(cid_dom) = $fd;
+	if ($var(cid_dom) == NULL || $(var(cid_dom){s.len}) == 0) {
+		$var(cid_dom) = $td;
+	}
+	$dlg_val(os_cli) = $var(cid_cli);
+	$acc_extra(cli) = $var(cid_cli);
+	remove_hf("From");
+	append_hf("From: <sip:$var(cid_cli)@$var(cid_dom)>;tag=$ft\r\n");
+	remove_hf("P-Asserted-Identity");
+	append_hf("P-Asserted-Identity: <sip:$var(cid_cli)@$var(cid_dom)>\r\n");
+	remove_hf("Remote-Party-ID");
+	append_hf("Remote-Party-ID: <sip:$var(cid_cli)@$var(cid_dom)>;party=calling;privacy=off;screen=yes\r\n");
+	xlog("L_INFO", "CallerID group CLI=$var(cid_cli) user=$var(cid_user) dst=$var(cid_dst)\n");
+}'
+    chmod 644 "${_cid_script}" 2>/dev/null || true
+    log_info "CallerID group: exec → ${_cid_script}"
+  else
+    export OPENSIPS_CALLERID_ROUTE='route[apply_callerid_group] {
+	return;
+}'
+    log_warn "CallerID group: exec/dial-callerid-pick missing — stub only"
   fi
 fi
 
@@ -698,7 +804,10 @@ log_info "OpenSIPS DEFAULT_MEDIA_POLICY=${DEFAULT_MEDIA_POLICY}"
 : "${OPENSIPS_TRUNK_LIMIT_ROUTE:=route[check_trunk_limits] {
 	return;
 }}"
-export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE
+: "${OPENSIPS_CALLERID_ROUTE:=route[apply_callerid_group] {
+	return;
+}}"
+export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE OPENSIPS_CALLERID_ROUTE
 
 # ---------------------------------------------------------------------------
 # 6. Render + validate + activate cfg

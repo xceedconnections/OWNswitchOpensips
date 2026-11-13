@@ -6,7 +6,7 @@ $canWrite = !empty($canWrite);
 <div class="os-panel col-12 mt-3">
     <div class="p-3 p-md-4">
         <h2 class="h6 fw-semibold mb-1">Prefix → CLI numbers <span class="os-count"><?= e((string) count($numbers)) ?></span></h2>
-        <p class="small text-muted mb-3">The longest prefix that matches the dialled number selects the outbound CallerID. Use <code>*</code> as a default for any destination. Several rows with the same prefix are allowed.</p>
+        <p class="small text-muted mb-3">Outbound CallerID: longest <strong>prefix</strong> matching the dialled number wins (use <code>*</code> as default). Several CLIs with the same prefix rotate. If no prefix matches, Ownswitch picks a CLI that shares the longest starting digits with the dialled number (e.g. dialled <code>1213…</code> → CLI <code>12138789985</code>), then falls back to a random CLI in the group.</p>
 
         <?php if ($canWrite): ?>
         <form method="post" action="<?= e(url($base . '/' . $gid . '/numbers')) ?>" class="row g-2 align-items-end mb-3">

@@ -339,9 +339,7 @@ route {
 	create_dialog("BPp");
 	# Prefer digest auth user — $fU may be presented CallerID (ViciDial)
 	route(resolve_os_src);
-	# Enforce SIP-user Channels + CPS (-1 = unlimited); no pike for legal traffic
-	route(check_sip_limits);
-	# SIP-user destination prefix replace (2=12 → 213… becomes 1213…) before rating/CDR/vendor
+	# SIP-user destination prefix replace (2=12 → 213… becomes 1213…) BEFORE rate/CDR/vendor
 	route(apply_sip_dst_rewrite);
 	$dlg_val(os_dst) = $rU;
 	# Presented CLI starts as From user; apply_sip_cid replaces with display_name / fixed
@@ -357,11 +355,11 @@ route {
 		$dlg_val(os_dtmf) = "1";
 	}
 
-	# Resolve Softphone Display Name → os_cli / ACC cli BEFORE do_accounting so
-	# missed/failed CDRs do not keep the SIP username stamped above.
+	# Softphone Display Name / fixed / passthrough, then CallerID-group rotation (prefix match)
 	route(apply_sip_cid);
+	route(apply_callerid_group);
 
-	# CGRateS: accounting when available; portal prepaid empty balance already blocked via allow_calls
+	# ACC before rate/DNC/limits rejects → failed CDRs for unrated / blocked / congestion
 	if (!cgrates_auth()) {
 		xlog("L_WARN", "cgrates_auth failed user=$au to=$rU from=$si (continuing; portal allow_calls enforced)\n");
 	} else {
@@ -379,31 +377,41 @@ route {
 	t_on_reply("handle_reply");
 	t_on_failure("carrier_failover");
 
-	# SIP-user DNC: block before any trunk/vendor is contacted (uses original dialled $rU)
+	# SIP-user DNC: block before any trunk/vendor (post-rewrite digits in $rU / os_dst)
 	route(check_sip_dnc);
 
-	# No matching plan/tariff prefix → reject (aligns with RouteSimulator "unrated")
+	# No matching plan/tariff prefix → 403 + failed CDR only (never vendor)
+	# Also sets $avp(os_rplan) = trunk-group id (SIP-user TG overrides tariff TG)
 	route(check_customer_rate);
 
-	# Group "1" is filled by Ownswitch (php bin/sync-opensips-trunks.php / trunk+route save)
-	# 5th arg = gw attrs pvar (fu=/fd=/rstrip= from trunk sync). strip/pri_prefix via DR.
-	if (!do_routing(1, , , , $avp(dr_gw_attrs))) {
-		xlog("L_WARN", "no route for $rU from $fU - sync trunks/routes\n");
+	# SIP-user Channels + CPS after rewrite/rate (so congestion still has ACC)
+	route(check_sip_limits);
+
+	# do_routing(group) = portal trunk-group id from check_customer_rate
+	if ($avp(os_rplan) == NULL || $(avp(os_rplan){s.int}) <= 0) {
+		xlog("L_WARN", "no trunk group for $rU user=$dlg_val(os_src)\n");
+		acc_db_request("503 No Route", "acc");
+		send_reply(503, "No Route");
+		exit;
+	}
+	if (!do_routing($avp(os_rplan), , , , $avp(dr_gw_attrs))) {
+		xlog("L_WARN", "no route for $rU tg=$avp(os_rplan) from $fU - sync trunks/routes\n");
 		acc_db_request("503 No Route", "acc");
 		send_reply(503, "No Route");
 		exit;
 	}
 
-	# Trunk DNC uses original dialled digits ($dlg_val(os_dst)) — before strip so list matches portal
+	# Trunk DNC uses dialled digits ($dlg_val(os_dst)) — before strip
 	route(check_dnc);
 	route(apply_ruri_strip);
 	route(apply_sip_cid);
+	route(apply_callerid_group);
 	route(check_cid_len);
 	route(check_cli_restriction);
 	route(apply_trunk_attrs);
 	route(check_trunk_cid_len);
 	route(check_rate_cap);
-	# Trunk Channels + CPS — on exceed try next gw in trunk-group / LCR list
+	# Trunk Channels + CPS — on exceed try next gw in this trunk group
 	route(check_trunk_limits);
 	route(apply_sip_dst_format);
 	route(apply_trunk_dst_format);
@@ -869,6 +877,9 @@ route[check_cid_len] {
 # Trunk Channels + CPS with next-route failover (bin/dial-trunk-limit-check.php)
 @@OPENSIPS_TRUNK_LIMIT_ROUTE@@
 
+# CallerID group: longest dialled-prefix match + rotation; else random (bin/dial-callerid-pick.php)
+@@OPENSIPS_CALLERID_ROUTE@@
+
 # CLI Restriction lists (Settings → CLI Restriction) — block presented CLI with 403
 @@OPENSIPS_CLI_RESTRICT_ROUTE@@
 
@@ -1016,6 +1027,7 @@ failure_route[carrier_failover] {
 		route(apply_sip_dst_format);
 		route(apply_trunk_dst_format);
 		route(store_delayed_bye);
+		route(apply_callerid_group);
 		route(acc_cli_gw);
 		t_on_failure("carrier_failover");
 		t_relay();

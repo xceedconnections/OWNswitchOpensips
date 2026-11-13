@@ -46,9 +46,11 @@ final class CallLimitService
         }
 
         if ($maxCh >= 0) {
+            // Current INVITE already has create_dialog + os_src, so count includes self.
+            // Deny only when strictly over the limit (using > max).
             $using = $this->countSipDialogs($username);
-            if ($using >= $maxCh) {
-                return ['allow' => false, 'reason' => "channels {$using}>={$maxCh}"];
+            if ($using > $maxCh) {
+                return ['allow' => false, 'reason' => "channels {$using}>{$maxCh}"];
             }
         }
 
@@ -83,9 +85,10 @@ final class CallLimitService
         }
 
         if ($maxCh >= 0) {
+            // tid dlg_val may already be set for this dialog — treat as inclusive of self.
             $using = $this->countTrunkDialogs($trunkId);
-            if ($using >= $maxCh) {
-                return ['allow' => false, 'reason' => "channels {$using}>={$maxCh}"];
+            if ($using > $maxCh) {
+                return ['allow' => false, 'reason' => "channels {$using}>{$maxCh}"];
             }
         }
 

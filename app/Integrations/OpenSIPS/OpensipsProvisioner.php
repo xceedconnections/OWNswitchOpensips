@@ -607,7 +607,11 @@ final class OpensipsProvisioner
     }
 
     /**
-     * @param list<array{prefix:string,carrier_trunk_id:int,priority:int,status?:string,sort_alg?:string,strategy?:string}> $rules
+     * Sync trunk-group rules into OpenSIPS drouting.
+     * Each portal routing_plan_id becomes its own dr_rules.groupid so live
+     * do_routing(plan_id) matches RouteSimulator (SIP-user TG overrides tariff TG).
+     *
+     * @param list<array{prefix:string,carrier_trunk_id:int,priority:int,status?:string,sort_alg?:string,strategy?:string,routing_plan_id?:int}> $rules
      */
     public function syncRoutingRules(array $rules): void
     {
@@ -615,43 +619,59 @@ final class OpensipsProvisioner
             throw new \RuntimeException('opensips.dr_rules missing — apply drouting schema');
         }
         $db = $this->db();
-        $byPrefix = [];
+        $byPlan = [];
         foreach ($rules as $r) {
             if (($r['status'] ?? 'active') !== 'active') {
                 continue;
             }
-            $byPrefix[(string) $r['prefix']][] = $r;
-        }
-        foreach ($byPrefix as &$list) {
-            usort($list, static fn ($a, $b) => ((int) $a['priority']) <=> ((int) $b['priority']));
-        }
-        unset($list);
-
-        $db->prepare('DELETE FROM dr_rules WHERE groupid = ?')->execute([self::DR_GROUP]);
-        $prio = 0;
-        $hasSort = in_array('sort_alg', $this->columns('dr_rules'), true);
-        foreach ($byPrefix as $prefix => $list) {
-            $gws = [];
-            $sortAlg = 'N';
-            foreach ($list as $r) {
-                $gws[] = self::gwid((int) $r['carrier_trunk_id']);
-                if (($r['sort_alg'] ?? '') === 'R' || ($r['strategy'] ?? '') === 'random') {
-                    $sortAlg = 'R'; // equal random pick among gateways
-                }
-            }
-            $gwlist = implode(',', array_unique($gws));
-            if ($gwlist === '') {
+            $pid = (int) ($r['routing_plan_id'] ?? 0);
+            if ($pid <= 0) {
                 continue;
             }
-            // Trunk-group catch-all (*) → empty OpenSIPS prefix (default / longest-match fallback)
-            $drPrefix = $prefix === '*' ? '' : $prefix;
-            $desc = 'ownswitch:' . ($prefix === '*' ? 'default' : $prefix);
-            if ($hasSort) {
-                $db->prepare('INSERT INTO dr_rules (groupid, prefix, timerec, priority, routeid, gwlist, sort_alg, description) VALUES (?,?,?,?,NULL,?,?,?)')
-                    ->execute([self::DR_GROUP, $drPrefix, '', $prio++, $gwlist, $sortAlg, $desc]);
-            } else {
-                $db->prepare('INSERT INTO dr_rules (groupid, prefix, timerec, priority, routeid, gwlist, description) VALUES (?,?,?,?,NULL,?,?)')
-                    ->execute([self::DR_GROUP, $drPrefix, '', $prio++, $gwlist, $desc]);
+            $byPlan[$pid][(string) $r['prefix']][] = $r;
+        }
+        foreach ($byPlan as &$byPrefix) {
+            foreach ($byPrefix as &$list) {
+                usort($list, static fn ($a, $b) => ((int) $a['priority']) <=> ((int) $b['priority']));
+            }
+            unset($list);
+        }
+        unset($byPrefix);
+
+        // Drop previous Ownswitch-managed rules (per-plan groups + legacy flat group 1)
+        try {
+            $db->exec("DELETE FROM dr_rules WHERE description LIKE 'ownswitch:%' OR groupid = " . (int) self::DR_GROUP);
+        } catch (\Throwable) {
+            $db->prepare('DELETE FROM dr_rules WHERE groupid = ?')->execute([self::DR_GROUP]);
+        }
+
+        $hasSort = in_array('sort_alg', $this->columns('dr_rules'), true);
+        foreach ($byPlan as $planId => $byPrefix) {
+            $prio = 0;
+            $groupid = (string) (int) $planId;
+            foreach ($byPrefix as $prefix => $list) {
+                $gws = [];
+                $sortAlg = 'N';
+                foreach ($list as $r) {
+                    $gws[] = self::gwid((int) $r['carrier_trunk_id']);
+                    if (($r['sort_alg'] ?? '') === 'R' || ($r['strategy'] ?? '') === 'random') {
+                        $sortAlg = 'R';
+                    }
+                }
+                $gwlist = implode(',', array_unique($gws));
+                if ($gwlist === '') {
+                    continue;
+                }
+                // Trunk-group catch-all (*) → empty OpenSIPS prefix (default / longest-match fallback)
+                $drPrefix = $prefix === '*' ? '' : $prefix;
+                $desc = 'ownswitch:tg' . $planId . ':' . ($prefix === '*' ? 'default' : $prefix);
+                if ($hasSort) {
+                    $db->prepare('INSERT INTO dr_rules (groupid, prefix, timerec, priority, routeid, gwlist, sort_alg, description) VALUES (?,?,?,?,NULL,?,?,?)')
+                        ->execute([$groupid, $drPrefix, '', $prio++, $gwlist, $sortAlg, $desc]);
+                } else {
+                    $db->prepare('INSERT INTO dr_rules (groupid, prefix, timerec, priority, routeid, gwlist, description) VALUES (?,?,?,?,NULL,?,?)')
+                        ->execute([$groupid, $drPrefix, '', $prio++, $gwlist, $desc]);
+                }
             }
         }
     }
