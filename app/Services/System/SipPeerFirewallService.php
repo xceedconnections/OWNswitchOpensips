@@ -63,6 +63,57 @@ final class SipPeerFirewallService
     }
 
     /**
+     * Allow carrier/trunk signalling IP(s) on SIP listen port.
+     *
+     * @param list<string> $ips
+     * @return array{ok:bool,detail:string}
+     */
+    public function syncTrunk(int $trunkId, array $ips, int $sipPort = 5060): array
+    {
+        if ($trunkId <= 0) {
+            return ['ok' => false, 'detail' => 'Invalid trunk id'];
+        }
+        $clean = [];
+        foreach ($ips as $ip) {
+            $ip = trim((string) $ip);
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                $clean[] = $ip;
+            }
+        }
+        $clean = array_values(array_unique($clean));
+        if ($clean === []) {
+            return $this->removeTrunk($trunkId);
+        }
+        if ($sipPort <= 0 || $sipPort > 65535) {
+            $sipPort = 5060;
+        }
+        return $this->run(['sync-trunk', (string) $trunkId, implode(',', $clean), (string) $sipPort]);
+    }
+
+    /** @return array{ok:bool,detail:string} */
+    public function removeTrunk(int $trunkId): array
+    {
+        if ($trunkId <= 0) {
+            return ['ok' => false, 'detail' => 'Invalid trunk id'];
+        }
+        return $this->run(['remove-trunk', (string) $trunkId]);
+    }
+
+    /**
+     * open = world SIP:5060 (password softphones). locked = only peer/trunk allows.
+     *
+     * @return array{ok:bool,detail:string}
+     */
+    public function ensureSipMode(string $mode): array
+    {
+        $mode = strtolower(trim($mode));
+        if (!in_array($mode, ['open', 'locked'], true)) {
+            return ['ok' => false, 'detail' => 'mode must be open|locked'];
+        }
+        return $this->run(['ensure-mode', $mode]);
+    }
+
+    /**
      * @param list<string> $args
      * @return array{ok:bool,detail:string}
      */

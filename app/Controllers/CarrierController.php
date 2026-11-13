@@ -99,8 +99,8 @@ final class CarrierController extends CrudController
             ['name' => 'cid_min_len', 'label' => 'Min CallerID length (digits)', 'type' => 'number', 'min' => 0, 'max' => 32, 'help' => 'After trunk CID rewrite (and From user if set). Leave blank to disable. Too short → 484.', 'section' => 'Dial & CLI'],
             ['name' => 'cid_max_len', 'label' => 'Max CallerID length (digits)', 'type' => 'number', 'min' => 0, 'max' => 32, 'help' => 'After trunk CID rewrite. Leave blank to disable. Too long → 484.', 'section' => 'Dial & CLI'],
             ['name' => 'qualify', 'label' => 'Probe gateway', 'type' => 'select', 'options' => SipPeerOptions::YES_NO, 'default' => 'yes', 'help' => 'OpenSIPS gateway ping=30s (OPTIONS). No = ping disabled.', 'section' => 'Limits'],
-            ['name' => 'max_channels', 'label' => 'Channels', 'type' => 'int', 'min' => -1, 'max' => 1000000, 'required' => true, 'default' => '100', 'list' => true, 'help' => 'Max concurrent calls for this trunk (-1 = unlimited). Used for capacity / reporting; keep aligned with your vendor contract.', 'section' => 'Limits'],
-            ['name' => 'max_cps', 'label' => 'CPS (calls/sec)', 'type' => 'int', 'min' => -1, 'max' => 10000, 'required' => true, 'default' => '-1', 'list' => true, 'help' => 'Max new calls per second toward this trunk. -1 = unlimited. 0 is treated as 1.', 'section' => 'Limits'],
+            ['name' => 'max_channels', 'label' => 'Channels', 'type' => 'int', 'min' => -1, 'max' => 1000000, 'required' => true, 'default' => '100', 'list' => true, 'help' => 'Max concurrent calls on this trunk (-1 = unlimited). When exceeded, OpenSIPS tries the next trunk in the group / plan.', 'section' => 'Limits'],
+            ['name' => 'max_cps', 'label' => 'CPS (calls/sec)', 'type' => 'int', 'min' => -1, 'max' => 10000, 'required' => true, 'default' => '-1', 'list' => true, 'help' => 'Max new calls per second toward this trunk. -1 = unlimited. 0 is treated as 1. When exceeded, next route in the trunk group is tried.', 'section' => 'Limits'],
             ['name' => 'max_call_duration', 'label' => 'Max call duration (s)', 'type' => 'default_or_seconds', 'min' => 60, 'max' => 604800, 'default' => '0', 'list' => true, 'system_seconds' => (new \Ownswitch\Services\Settings\MaxCallDuration($this->db()))->systemDefault(), 'help' => 'Default uses system max call duration. Custom sets OpenSIPS max call duration on this gateway. SIP user / prepaid caps still apply.', 'section' => 'Limits'],
             ['name' => 'rate_cap', 'label' => 'CAP (max buy $/min)', 'type' => 'number', 'min' => 0, 'placeholder' => '0.008', 'list' => true, 'help' => 'Compared to this provider’s buy rate for the dialled prefix — independent of SIP user CAP. Example: CAP 0.008 allows buy 1213@0.005, skips this trunk for 1456@0.009 (try next trunk). Blank = no CAP.', 'section' => 'Limits'],
             ['name' => 'dnc_group_id', 'label' => 'DNC group', 'type' => 'select', 'options' => $this->dncGroupOptions(), 'list' => true, 'help' => 'Instant 403 before the vendor is INVITEd when the dialled number is on this list. Prefer also assigning the same group on the SIP user for a pre-routing block. Leave blank for no trunk DNC.', 'section' => 'Limits'],
@@ -392,6 +392,14 @@ final class CarrierController extends CrudController
             if ($this->kind === 'trunk') {
                 // Remove trunk from all trunk groups / routes first (RESTRICT FK).
                 $pdo->prepare('DELETE FROM routing_rules WHERE carrier_trunk_id = ?')->execute([$id]);
+                try {
+                    OpensipsProvisioner::fromConfig()->removeTrunk($id);
+                } catch (\Throwable) {
+                }
+                try {
+                    (new \Ownswitch\Services\System\SipPeerFirewallService())->removeTrunk($id);
+                } catch (\Throwable) {
+                }
                 return null;
             }
             // Provider: detach DID providers, delete rates, remove trunks (+ their route members).
@@ -425,8 +433,13 @@ final class CarrierController extends CrudController
                 try {
                     $prov = OpensipsProvisioner::fromConfig();
                     if ($prov->enabled()) {
+                        $fw = new \Ownswitch\Services\System\SipPeerFirewallService();
                         foreach ($trunkIds as $tid) {
                             $prov->removeTrunk($tid);
+                            try {
+                                $fw->removeTrunk($tid);
+                            } catch (\Throwable) {
+                            }
                         }
                         (new OpensipsRoutingSync($pdo, $prov))->syncAll();
                     }
@@ -456,6 +469,20 @@ final class CarrierController extends CrudController
             $row = $this->repo()->findInternal($id);
             if ($row) {
                 $prov->syncTrunk($row);
+                // Allow trunk signalling IP through firewall (inbound OPTIONS / re-INVITE)
+                try {
+                    $fw = new \Ownswitch\Services\System\SipPeerFirewallService();
+                    $host = trim((string) ($row['host'] ?? ''));
+                    $port = (int) ($row['port'] ?? 5060);
+                    if (($row['status'] ?? '') === 'active' && filter_var($host, FILTER_VALIDATE_IP)) {
+                        $fw->syncTrunk($id, [$host], $port > 0 ? $port : 5060);
+                    } else {
+                        $fw->removeTrunk($id);
+                    }
+                    (new \Ownswitch\Services\System\SipFirewallPolicyService($this->db()))->ensure();
+                } catch (\Throwable $fwEx) {
+                    error_log('[ownswitch] trunk firewall: ' . $fwEx->getMessage());
+                }
             }
             $sync = (new OpensipsRoutingSync($this->db(), $prov))->syncAll();
             if ($sync['warnings'] !== []) {
@@ -485,10 +512,15 @@ final class CarrierController extends CrudController
         if ($this->kind !== 'trunk') {
             return;
         }
+        $tid = (int) $row['id'];
+        try {
+            (new \Ownswitch\Services\System\SipPeerFirewallService())->removeTrunk($tid);
+        } catch (\Throwable) {
+        }
         $prov = OpensipsProvisioner::fromConfig();
         if ($prov->enabled()) {
             try {
-                $prov->removeTrunk((int) $row['id']);
+                $prov->removeTrunk($tid);
                 (new OpensipsRoutingSync($this->db(), $prov))->syncAll();
             } catch (\Throwable) {
                 App::session()->flash('warning', 'Deleted locally, but OpenSIPS deprovisioning failed.');

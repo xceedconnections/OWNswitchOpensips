@@ -362,7 +362,7 @@ final class SipUserController extends CrudController
                 'max' => 10000,
                 'required' => true,
                 'default' => '2',
-                'help' => 'Max concurrent calls for this SIP user (OpenSIPS call limit). -1 = unlimited.',
+                'help' => 'Max concurrent calls enforced by OpenSIPS for this SIP user. -1 = unlimited. Excess INVITEs get 503 Congestion.',
                 'section' => 'Routing & media',
             ],
             [
@@ -373,7 +373,7 @@ final class SipUserController extends CrudController
                 'max' => 1000,
                 'required' => true,
                 'default' => '1',
-                'help' => 'Max new calls per second (OpenSIPS call limit cps user N/1). -1 = unlimited. Typical PBX: 1–10. 0 is treated as 1.',
+                'help' => 'Max new calls per second enforced by OpenSIPS. -1 = unlimited. Typical dialer: 10–50. 0 is treated as 1.',
                 'section' => 'Routing & media',
             ],
             [
@@ -895,7 +895,8 @@ final class SipUserController extends CrudController
                 }
             }
 
-            // Firewall: IP peers get allow rules for every listed IP; dynamic / disabled remove them
+            // Firewall: IP peers get allow rules; dynamic (password) opens 5060 world-wide;
+            // IP-only installs lock 5060 to allow-listed peers/trunks + fail2ban.
             try {
                 if ($row['status'] === 'active' && $connMode === 'ip') {
                     $peerPort = (int) ($row['sip_port'] ?? 5060);
@@ -909,6 +910,10 @@ final class SipUserController extends CrudController
                     }
                 } else {
                     $fw->remove((string) $row['username']);
+                }
+                $pol = (new \Ownswitch\Services\System\SipFirewallPolicyService($this->db()))->ensure();
+                if (!$pol['ok']) {
+                    App::session()->flash('warning', 'SIP firewall mode (' . $pol['mode'] . ') failed: ' . mb_substr($pol['detail'], 0, 160));
                 }
             } catch (\Throwable $e) {
                 error_log('[ownswitch] SIP peer firewall: ' . $e->getMessage());
@@ -958,6 +963,7 @@ final class SipUserController extends CrudController
         }
         try {
             (new \Ownswitch\Services\System\SipPeerFirewallService())->remove((string) $row['username']);
+            (new \Ownswitch\Services\System\SipFirewallPolicyService($this->db()))->ensure();
         } catch (\Throwable) {
         }
     }

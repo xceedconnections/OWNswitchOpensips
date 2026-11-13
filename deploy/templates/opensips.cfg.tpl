@@ -169,6 +169,7 @@ route {
 		# Fall back to $td challenge only for the WWW-Authenticate realm display.
 		if (!www_authorize("", "subscriber")) {
 			xlog("L_WARN", "REGISTER auth failed user=$tU realm=$td from=$si\n");
+			xlog("L_WARN", "REGISTER unauthorized from=$si\n");
 			www_challenge("", "auth");
 			exit;
 		}
@@ -286,6 +287,7 @@ route {
 		if (!proxy_authorize("", "subscriber")) {
 			# Avoid punctuation immediately after $si / $fU (OpenSIPS xlog parse bug)
 			xlog("L_WARN", "INVITE auth failed user=$fU from=$si\n");
+			xlog("L_WARN", "INVITE unauthorized from=$si\n");
 			proxy_challenge("", "auth");
 			exit;
 		}
@@ -310,6 +312,7 @@ route {
 		# B=BYE on timeout; P/p=OPTIONS ping caller/callee → drop zombies when peer gone
 		create_dialog("BPp");
 		route(resolve_os_src);
+		route(check_sip_limits);
 		$dlg_val(os_dst) = $rU;
 		$acc_extra(src) = $dlg_val(os_src);
 		$acc_extra(dst) = $rU;
@@ -336,6 +339,8 @@ route {
 	create_dialog("BPp");
 	# Prefer digest auth user — $fU may be presented CallerID (ViciDial)
 	route(resolve_os_src);
+	# Enforce SIP-user Channels + CPS (-1 = unlimited); no pike for legal traffic
+	route(check_sip_limits);
 	# SIP-user destination prefix replace (2=12 → 213… becomes 1213…) before rating/CDR/vendor
 	route(apply_sip_dst_rewrite);
 	$dlg_val(os_dst) = $rU;
@@ -398,6 +403,8 @@ route {
 	route(apply_trunk_attrs);
 	route(check_trunk_cid_len);
 	route(check_rate_cap);
+	# Trunk Channels + CPS — on exceed try next gw in trunk-group / LCR list
+	route(check_trunk_limits);
 	route(apply_sip_dst_format);
 	route(apply_trunk_dst_format);
 	route(store_delayed_bye);
@@ -856,6 +863,12 @@ route[check_cid_len] {
 # (OPENSIPS_RATE_CAP_ROUTE injected on its own line — never put multiline placeholders inside # comments)
 @@OPENSIPS_RATE_CAP_ROUTE@@
 
+# SIP-user Channels + CPS (bin/dial-sip-limit-check.php)
+@@OPENSIPS_SIP_LIMIT_ROUTE@@
+
+# Trunk Channels + CPS with next-route failover (bin/dial-trunk-limit-check.php)
+@@OPENSIPS_TRUNK_LIMIT_ROUTE@@
+
 # CLI Restriction lists (Settings → CLI Restriction) — block presented CLI with 403
 @@OPENSIPS_CLI_RESTRICT_ROUTE@@
 
@@ -999,6 +1012,7 @@ failure_route[carrier_failover] {
 		route(apply_trunk_attrs);
 		route(check_trunk_cid_len);
 		route(check_rate_cap);
+		route(check_trunk_limits);
 		route(apply_sip_dst_format);
 		route(apply_trunk_dst_format);
 		route(store_delayed_bye);

@@ -191,10 +191,20 @@ fi
 cat >/etc/cron.d/ownswitch-sip-firewall <<'EOF'
 # Keep the SIP ban list on OpenSIPS auth failures, and never ban this host or a carrier trunk.
 */10 * * * * root /usr/local/sbin/ownswitch-fail2ban ensure-sip >/dev/null 2>&1
+# Re-apply SIP:5060 locked/open mode (password users → open; IP-only → locked)
+*/15 * * * * root /usr/bin/php /opt/ownswitch/current/bin/ensure-sip-firewall-mode.php >/dev/null 2>&1
 EOF
 chmod 0644 /etc/cron.d/ownswitch-sip-firewall
 if [[ -x /usr/local/sbin/ownswitch-fail2ban ]]; then
   /usr/local/sbin/ownswitch-fail2ban ensure-sip || echo "WARN: sip jail ensure failed" >&2
+fi
+if [[ -f /etc/fail2ban/filter.d/opensips-auth.conf ]]; then
+  systemctl reload fail2ban 2>/dev/null || systemctl restart fail2ban 2>/dev/null || true
+fi
+if [[ -x /usr/local/sbin/ownswitch-sip-peer-fw ]]; then
+  /usr/bin/php /opt/ownswitch/current/bin/ensure-sip-firewall-mode.php 2>/dev/null \
+    || /usr/bin/php /opt/ownswitch-src/bin/ensure-sip-firewall-mode.php 2>/dev/null \
+    || echo "WARN: sip firewall mode ensure deferred until app release" >&2
 fi
 
 echo

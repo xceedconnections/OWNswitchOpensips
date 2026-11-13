@@ -296,27 +296,14 @@ else
   export OPENSIPS_EXEC_BLOCK='# exec not installed'
 fi
 
+# Pike DISABLED: capacity is enforced by SIP-user / trunk Channels+CPS, and illegal
+# IPs are blocked by firewall (locked 5060) + fail2ban on auth failures. Dialers
+# (ViciDial) must never be pike-dropped mid-burst.
+export OPENSIPS_PIKE_MODULE_BLOCK='# pike disabled — use Channels/CPS + firewall/fail2ban'
+export OPENSIPS_PIKE_CHECK_BLOCK='# pike disabled (Channels/CPS + firewall jail)'
+log_info "pike anti-flood: disabled (limits via Channels/CPS; unknown IPs via firewall/fail2ban)"
 if (( HAVE_PIKE )); then
-  # Dialers (ViciDial) send large INVITE/BYE bursts from a few IPs. A low density
-  # (e.g. 30/2s) drops INVITE/CANCEL/BYE and looks like "congestion" on the PBX.
-  # Trusted customer (grp 1) + carrier (grp 2) address rows skip pike; unknown IPs
-  # still get a high but finite flood ceiling.
-  export OPENSIPS_PIKE_MODULE_BLOCK='loadmodule "pike.so"
-modparam("pike", "sampling_time_unit", 1)
-modparam("pike", "reqs_density_per_unit", 500)
-modparam("pike", "remove_latency", 4)'
-  export OPENSIPS_PIKE_CHECK_BLOCK='# Skip pike for provisioned customer/carrier IPs (dialer-safe)
-	if (!check_source_address(1) && !check_source_address(2)) {
-		if (!pike_check_req()) {
-			xlog("L_WARN", "pike drop flood from=$si method=$rm\n");
-			drop();
-			exit;
-		}
-	}'
-  log_info "pike anti-flood: skip address grp 1/2; else 500 req/s"
-else
-  export OPENSIPS_PIKE_MODULE_BLOCK='# pike.so not installed'
-  export OPENSIPS_PIKE_CHECK_BLOCK='# pike check skipped'
+  : # module present but intentionally not loaded
 fi
 
 # DNC hot-path (Redis preferred; sqlops fallback). Template always calls these routes.
@@ -547,6 +534,84 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
   fi
 fi
 
+# SIP-user Channels + CPS (exec → bin/dial-sip-limit-check.php)
+if [[ -z "${OPENSIPS_SIP_LIMIT_ROUTE:-}" ]]; then
+  _sip_lim_script="/opt/ownswitch/current/bin/dial-sip-limit-check.php"
+  [[ -f "${_sip_lim_script}" ]] || _sip_lim_script="/opt/ownswitch-src/bin/dial-sip-limit-check.php"
+  if (( HAVE_EXEC )) && [[ -f "${_sip_lim_script}" ]]; then
+    export OPENSIPS_SIP_LIMIT_ROUTE='route[check_sip_limits] {
+	$var(lim_user) = $avp(os_auth_user);
+	if ($var(lim_user) == NULL || $(var(lim_user){s.len}) == 0) {
+		$var(lim_user) = $dlg_val(os_src);
+	}
+	if ($var(lim_user) == NULL || $(var(lim_user){s.len}) == 0) {
+		$var(lim_user) = $au;
+	}
+	if ($var(lim_user) == NULL || $(var(lim_user){s.len}) == 0) {
+		return;
+	}
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_sip_lim_script}"' $var(lim_user)")) {
+		xlog("L_WARN", "SIP Congestion user=$var(lim_user) from=$si (channels/CPS)\n");
+		send_reply(503, "Congestion");
+		exit;
+	}
+}'
+    chmod 644 "${_sip_lim_script}" 2>/dev/null || true
+    log_info "SIP limits: exec → ${_sip_lim_script}"
+  else
+    export OPENSIPS_SIP_LIMIT_ROUTE='route[check_sip_limits] {
+	return;
+}'
+    log_warn "SIP limits: exec/dial-sip-limit-check missing — stub only"
+  fi
+fi
+
+# Trunk Channels + CPS with next-gw failover (exec → bin/dial-trunk-limit-check.php)
+if [[ -z "${OPENSIPS_TRUNK_LIMIT_ROUTE:-}" ]]; then
+  _trk_lim_script="/opt/ownswitch/current/bin/dial-trunk-limit-check.php"
+  [[ -f "${_trk_lim_script}" ]] || _trk_lim_script="/opt/ownswitch-src/bin/dial-trunk-limit-check.php"
+  if (( HAVE_EXEC )) && [[ -f "${_trk_lim_script}" ]]; then
+    export OPENSIPS_TRUNK_LIMIT_ROUTE='route[check_trunk_limits] {
+	if ($avp(dr_gw_attrs) == NULL) {
+		return;
+	}
+	$var(tid) = $(avp(dr_gw_attrs){param.value,tid});
+	if ($var(tid) == NULL || $(var(tid){s.len}) == 0) {
+		return;
+	}
+	$dlg_val(tid) = $var(tid);
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_trk_lim_script}"' $var(tid)")) {
+		xlog("L_WARN", "Trunk capacity exceeded tid=$var(tid) — trying next route\n");
+		if ($var(trk_lim_tries) == NULL) {
+			$var(trk_lim_tries) = 0;
+		}
+		$var(trk_lim_tries) = $(var(trk_lim_tries){s.int}) + 1;
+		if ($(var(trk_lim_tries){s.int}) < 8 && use_next_gw()) {
+			route(check_dnc);
+			route(apply_ruri_strip);
+			route(apply_sip_cid);
+			route(check_cid_len);
+			route(check_cli_restriction);
+			route(apply_trunk_attrs);
+			route(check_trunk_cid_len);
+			route(check_rate_cap);
+			route(check_trunk_limits);
+			return;
+		}
+		send_reply(503, "Congestion");
+		exit;
+	}
+}'
+    chmod 644 "${_trk_lim_script}" 2>/dev/null || true
+    log_info "Trunk limits: exec → ${_trk_lim_script}"
+  else
+    export OPENSIPS_TRUNK_LIMIT_ROUTE='route[check_trunk_limits] {
+	return;
+}'
+    log_warn "Trunk limits: exec/dial-trunk-limit-check missing — stub only"
+  fi
+fi
+
 # CLI Restriction lists (block presented CallerID)
 if [[ -z "${OPENSIPS_CLI_RESTRICT_ROUTE:-}" ]]; then
   _cli_script="/opt/ownswitch/current/bin/cli-restrict-check.php"
@@ -625,6 +690,15 @@ if command -v mysql >/dev/null 2>&1; then
 fi
 export DEFAULT_MEDIA_POLICY="${_default_media}"
 log_info "OpenSIPS DEFAULT_MEDIA_POLICY=${DEFAULT_MEDIA_POLICY}"
+
+# Safe stubs if limit routes were not injected above (missing exec/scripts)
+: "${OPENSIPS_SIP_LIMIT_ROUTE:=route[check_sip_limits] {
+	return;
+}}"
+: "${OPENSIPS_TRUNK_LIMIT_ROUTE:=route[check_trunk_limits] {
+	return;
+}}"
+export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE
 
 # ---------------------------------------------------------------------------
 # 6. Render + validate + activate cfg

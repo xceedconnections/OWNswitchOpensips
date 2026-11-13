@@ -57,15 +57,22 @@ ufw_rule allow 80/tcp  comment 'http (redirect + ACME)'
 ufw_rule allow 443/tcp comment 'https portal'
 
 # 4. SIP signalling
+# Default: LOCKED (no world-open 5060). IP-auth peers + trunks are allow-listed by
+# ownswitch-sip-peer-fw when saved in the portal. Password/digest SIP users force
+# world-open via ensure-mode open (digest + fail2ban protect that path).
+# Explicit SIP_ALLOW_CIDRS still adds static allows. SIP_OPEN_WORLD=1 forces open.
 if [[ -n "${SIP_ALLOW_CIDRS}" ]]; then
   while read -r cidr; do
     ufw_rule allow from "$cidr" to any port "${SIP_PORT}" proto udp comment 'sip-allowlist'
     ufw_rule allow from "$cidr" to any port "${SIP_PORT}" proto tcp comment 'sip-allowlist'
   done < <(csv_each "${SIP_ALLOW_CIDRS}")
+  log_info "SIP allow-list from SIP_ALLOW_CIDRS (no world-open)"
+elif is_true "${SIP_OPEN_WORLD:-0}"; then
+  ufw_rule allow "${SIP_PORT}/udp" comment 'ownswitch-sip-world'
+  ufw_rule allow "${SIP_PORT}/tcp" comment 'ownswitch-sip-world'
+  log_warn "SIP is open to the world (SIP_OPEN_WORLD=1). Prefer IP peers + locked mode."
 else
-  ufw_rule allow "${SIP_PORT}/udp" comment 'sip udp'
-  ufw_rule allow "${SIP_PORT}/tcp" comment 'sip tcp'
-  log_warn "SIP is open to the world. Restrict with SIP_ALLOW_CIDRS=a.b.c.d/32,... once customer/carrier IPs are known."
+  log_info "SIP port ${SIP_PORT} locked by default — portal IP peers/trunks + fail2ban jail protect it"
 fi
 
 # 5. RTP media (RTPengine)
@@ -123,6 +130,7 @@ EOF
   sip_jail_tmp="$(mktemp)"
   cat >"$sip_jail_tmp" <<EOF
 # Managed by Ownswitch installer (portal may update thresholds)
+# Instant-ish ban for illegal/digest-failed SIP probes on 5060
 [opensips-auth]
 enabled  = true
 filter   = opensips-auth
@@ -131,8 +139,8 @@ protocol = udp,tcp
 backend  = auto
 logpath  = /var/log/opensips/auth.log
            /var/log/auth.log
-maxretry = 5
-findtime = 10m
+maxretry = 2
+findtime = 5m
 bantime  = 24h
 ignoreip = 127.0.0.1/8 ::1
 usedns   = no
