@@ -427,7 +427,9 @@ final class SipUserController extends CrudController
     }
 
     /**
-     * Per-IP Live latency for the edit/view IPs tab (IP-based peers only).
+     * Per-IP Live status for the edit/view IPs tab (IP-based peers only).
+     * Green + ms only when OpenSIPS has a live REGISTER whose contact/received matches that IP.
+     * ACL allow-lists and raw OPTIONS replies do not count as online.
      *
      * @return array{peerIpLatency: list<array{ip:string,port:int,online:bool,ms:?int,state:string}>}
      */
@@ -445,22 +447,37 @@ final class SipUserController extends CrudController
         if ($port <= 0) {
             $port = 5060;
         }
-        $user = (string) ($existing['username'] ?? '');
-        $qualify = strtolower((string) ($existing['qualify'] ?? 'yes')) === 'yes';
+        $user = strtolower(trim((string) ($existing['username'] ?? '')));
+        $prov = OpensipsProvisioner::fromConfig();
+        $regs = $prov->enabled() ? $prov->registeredContacts() : [];
+        $reg = $this->findRegistration($user, $regs);
+        if ($reg !== null) {
+            $exp = (int) ($reg['expires'] ?? 0);
+            if ($exp > 0 && $exp <= time()) {
+                $reg = null;
+            }
+        }
         $rows = [];
         foreach ($ips as $ip) {
+            $online = false;
             $ms = null;
-            // IP-based peers are authorized by ACL — they do not REGISTER.
-            // OPTIONS latency is optional; many dialers (ViciDial) ignore/block OPTIONS.
-            if ($qualify) {
-                $ms = SipOptionsProbe::rttMs($ip, $port, 1.2, $user);
-            }
-            if ($ms !== null) {
-                $online = true;
-                $state = 'REACHABLE';
-            } else {
-                $online = true;
-                $state = 'IP AUTH';
+            $state = 'offline';
+            if ($reg !== null && $this->registrationMatchesIp($reg, $ip)) {
+                $reachable = !isset($reg['reachable']) || !empty($reg['reachable']);
+                $st = strtoupper(trim((string) ($reg['state'] ?? 'REGED')));
+                if ($st === '') {
+                    $st = 'REGED';
+                }
+                if ($reachable && $st !== 'UNREACHABLE' && $st !== 'UNREGISTERED') {
+                    $online = true;
+                    $state = $st;
+                    $fromFs = (int) ($reg['latency_ms'] ?? 0);
+                    if ($fromFs > 0) {
+                        $ms = $fromFs;
+                    }
+                } else {
+                    $state = $st !== '' ? $st : 'UNREACHABLE';
+                }
             }
             $rows[] = [
                 'ip' => $ip,
@@ -490,20 +507,7 @@ final class SipUserController extends CrudController
         foreach ($rows as &$row) {
             $user = strtolower(trim((string) ($row['username'] ?? '')));
             $qualify = strtolower((string) ($row['qualify'] ?? 'yes')) === 'yes';
-            $reg = $regs[$user] ?? null;
-            if ($reg === null) {
-                foreach ($regs as $k => $info) {
-                    if ($k === $user || str_starts_with((string) $k, $user . '@') || str_ends_with((string) $k, '@' . $user)) {
-                        $reg = $info;
-                        break;
-                    }
-                    $c = strtolower((string) ($info['contact'] ?? ''));
-                    if ($c !== '' && str_contains($c, 'sip:' . $user . '@')) {
-                        $reg = $info;
-                        break;
-                    }
-                }
-            }
+            $reg = $this->findRegistration($user, $regs);
             $hostRaw = (string) ($row['sip_host'] ?? 'dynamic');
             $peerIps = SipHosts::parse($hostRaw);
             $port = (int) ($row['sip_port'] ?? 5060);
@@ -528,6 +532,7 @@ final class SipUserController extends CrudController
             }
 
             $isDynamic = $peerIps === [];
+            // Live = active REGISTER only. IP ACL / firewall OPTIONS replies do not count.
             if ($reg !== null) {
                 $state = strtoupper(trim((string) ($reg['state'] ?? 'REGED')));
                 if ($state === '') {
@@ -535,10 +540,19 @@ final class SipUserController extends CrudController
                 }
                 // Ping-Status Unreachable (or flag) = offline even while OpenSIPS still holds the AOR.
                 $reachable = !isset($reg['reachable']) || !empty($reg['reachable']);
-                if (!$reachable || $state === 'UNREACHABLE' || $state === 'UNREGISTERED') {
+                $ipOk = $isDynamic;
+                if (!$isDynamic) {
+                    foreach ($peerIps as $pip) {
+                        if ($this->registrationMatchesIp($reg, $pip)) {
+                            $ipOk = true;
+                            break;
+                        }
+                    }
+                }
+                if (!$reachable || !$ipOk || $state === 'UNREACHABLE' || $state === 'UNREGISTERED') {
                     $online = false;
                     $ms = null;
-                    $state = $state !== '' ? $state : 'UNREACHABLE';
+                    $state = !$ipOk && $reachable ? 'offline' : ($state !== '' ? $state : 'UNREACHABLE');
                 } else {
                     $online = true;
                     $fromFs = (int) ($reg['latency_ms'] ?? 0);
@@ -547,18 +561,15 @@ final class SipUserController extends CrudController
                     }
                 }
             } elseif (!$isDynamic) {
-                // Fixed-IP peer(s): authorized via address ACL (no REGISTER).
-                // OPTIONS is optional latency only — dialers often do not reply.
-                if ($qualify) {
-                    $ms = SipOptionsProbe::rttMs($peerIps[0], $port, 1.5, $user);
-                }
-                $online = true;
-                $state = ($ms !== null) ? 'REACHABLE' : 'IP AUTH';
+                // Fixed-IP ACL peer with no REGISTER → offline (not green "IP AUTH").
+                $online = false;
+                $ms = null;
+                $state = 'offline';
             }
 
-            // Dynamic REGED UAs sit behind NAT — probe via OpenSIPS (OPTIONS sip:user@public:5060
-            // is looked up + relayed to the contact). Direct OPTIONS to received:port usually fails.
-            if ($online && $qualify && ($ms === null || $ms <= 0) && $user !== '') {
+            // Only when already REGED: optional OPTIONS RTT via OpenSIPS → contact (real UA ms).
+            // Never use a bare OPTIONS reply to mark an unregistered peer live.
+            if ($online && $qualify && ($ms === null || $ms <= 0) && $user !== '' && is_array($reg)) {
                 $probeHost = trim((string) App::config('app.integrations.opensips.public_ip', ''));
                 if ($probeHost === '') {
                     $probeHost = trim((string) App::config('app.integrations.opensips.sip_domain', ''));
@@ -570,7 +581,7 @@ final class SipUserController extends CrudController
                 if ($probeHost !== '') {
                     $ms = SipOptionsProbe::rttMs($probeHost, $probePort, 2.5, $user);
                 }
-                if (($ms === null || $ms <= 0) && is_array($reg)) {
+                if (($ms === null || $ms <= 0)) {
                     foreach (['received', 'contact'] as $uriKey) {
                         $uri = trim((string) ($reg[$uriKey] ?? ''));
                         if ($uri === '') {
@@ -1041,6 +1052,65 @@ final class SipUserController extends CrudController
             return $mode;
         }
         return SipHosts::parse((string) ($row['sip_host'] ?? '')) !== [] ? 'ip' : 'dynamic';
+    }
+
+    /**
+     * @param array<string, array<string,mixed>> $regs
+     * @return array<string,mixed>|null
+     */
+    private function findRegistration(string $user, array $regs): ?array
+    {
+        $user = strtolower(trim($user));
+        if ($user === '') {
+            return null;
+        }
+        if (isset($regs[$user]) && is_array($regs[$user])) {
+            return $regs[$user];
+        }
+        foreach ($regs as $k => $info) {
+            if (!is_array($info)) {
+                continue;
+            }
+            $k = strtolower((string) $k);
+            if ($k === $user || str_starts_with($k, $user . '@') || str_ends_with($k, '@' . $user)) {
+                return $info;
+            }
+            $c = strtolower((string) ($info['contact'] ?? ''));
+            if ($c !== '' && str_contains($c, 'sip:' . $user . '@')) {
+                return $info;
+            }
+        }
+        return null;
+    }
+
+    /** True when usrloc contact/received host equals the allowed peer IP. */
+    private function registrationMatchesIp(array $reg, string $ip): bool
+    {
+        $ip = strtolower(trim($ip));
+        if ($ip === '') {
+            return false;
+        }
+        if (str_starts_with($ip, '[') && str_ends_with($ip, ']')) {
+            $ip = substr($ip, 1, -1);
+        }
+        foreach (['received', 'contact'] as $uriKey) {
+            $uri = trim((string) ($reg[$uriKey] ?? ''));
+            if ($uri === '') {
+                continue;
+            }
+            $ep = SipOptionsProbe::endpointFromUri($uri);
+            if ($ep === null) {
+                continue;
+            }
+            $host = strtolower(trim($ep['host']));
+            if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
+                $host = substr($host, 1, -1);
+            }
+            if ($host === $ip) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static function generatePassword(int $bytes = 15): string
