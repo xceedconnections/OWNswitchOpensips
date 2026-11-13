@@ -99,7 +99,8 @@ final class CarrierController extends CrudController
             ['name' => 'cid_min_len', 'label' => 'Min CallerID length (digits)', 'type' => 'number', 'min' => 0, 'max' => 32, 'help' => 'After trunk CID rewrite (and From user if set). Leave blank to disable. Too short → 484.', 'section' => 'Dial & CLI'],
             ['name' => 'cid_max_len', 'label' => 'Max CallerID length (digits)', 'type' => 'number', 'min' => 0, 'max' => 32, 'help' => 'After trunk CID rewrite. Leave blank to disable. Too long → 484.', 'section' => 'Dial & CLI'],
             ['name' => 'qualify', 'label' => 'Probe gateway', 'type' => 'select', 'options' => SipPeerOptions::YES_NO, 'default' => 'yes', 'help' => 'OpenSIPS gateway ping=30s (OPTIONS). No = ping disabled.', 'section' => 'Limits'],
-            ['name' => 'max_channels', 'label' => 'Channels', 'type' => 'int', 'min' => 0, 'max' => 1000000, 'required' => true, 'default' => '100', 'list' => true, 'help' => 'Capacity hint for portal/reporting (not a hard OpenSIPS gateway cap).', 'section' => 'Limits'],
+            ['name' => 'max_channels', 'label' => 'Channels', 'type' => 'int', 'min' => -1, 'max' => 1000000, 'required' => true, 'default' => '100', 'list' => true, 'help' => 'Max concurrent calls for this trunk (-1 = unlimited). Used for capacity / reporting; keep aligned with your vendor contract.', 'section' => 'Limits'],
+            ['name' => 'max_cps', 'label' => 'CPS (calls/sec)', 'type' => 'int', 'min' => -1, 'max' => 10000, 'required' => true, 'default' => '-1', 'list' => true, 'help' => 'Max new calls per second toward this trunk. -1 = unlimited. 0 is treated as 1.', 'section' => 'Limits'],
             ['name' => 'max_call_duration', 'label' => 'Max call duration (s)', 'type' => 'default_or_seconds', 'min' => 60, 'max' => 604800, 'default' => '0', 'list' => true, 'system_seconds' => (new \Ownswitch\Services\Settings\MaxCallDuration($this->db()))->systemDefault(), 'help' => 'Default uses system max call duration. Custom sets OpenSIPS max call duration on this gateway. SIP user / prepaid caps still apply.', 'section' => 'Limits'],
             ['name' => 'rate_cap', 'label' => 'CAP (max buy $/min)', 'type' => 'number', 'min' => 0, 'placeholder' => '0.008', 'list' => true, 'help' => 'Compared to this provider’s buy rate for the dialled prefix — independent of SIP user CAP. Example: CAP 0.008 allows buy 1213@0.005, skips this trunk for 1456@0.009 (try next trunk). Blank = no CAP.', 'section' => 'Limits'],
             ['name' => 'dnc_group_id', 'label' => 'DNC group', 'type' => 'select', 'options' => $this->dncGroupOptions(), 'list' => true, 'help' => 'Instant 403 before the vendor is INVITEd when the dialled number is on this list. Prefer also assigning the same group on the SIP user for a pre-routing block. Leave blank for no trunk DNC.', 'section' => 'Limits'],
@@ -294,6 +295,31 @@ final class CarrierController extends CrudController
             } else {
                 $cap = (float) $data['rate_cap'];
                 $data['rate_cap'] = $cap > 0 ? number_format($cap, 8, '.', '') : null;
+            }
+            if (array_key_exists('max_channels', $data)) {
+                $ch = (int) $data['max_channels'];
+                if ($ch < -1) {
+                    $ch = -1;
+                }
+                if ($ch > 1000000) {
+                    $ch = 1000000;
+                }
+                $data['max_channels'] = $ch;
+            } elseif ($existing === null) {
+                $data['max_channels'] = 100;
+            }
+            if (array_key_exists('max_cps', $data)) {
+                $cps = (int) $data['max_cps'];
+                if ($cps < -1) {
+                    $cps = -1;
+                }
+                if ($cps > 10000) {
+                    $cps = 10000;
+                }
+                // 0 → 1 (same as SIP user CPS); -1 = unlimited
+                $data['max_cps'] = $cps === 0 ? 1 : $cps;
+            } elseif ($existing === null) {
+                $data['max_cps'] = -1;
             }
             if (array_key_exists('max_call_duration', $data)) {
                 $mcd = (int) $data['max_call_duration'];

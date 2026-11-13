@@ -297,16 +297,23 @@ else
 fi
 
 if (( HAVE_PIKE )); then
+  # Dialers (ViciDial) send large INVITE/BYE bursts from a few IPs. A low density
+  # (e.g. 30/2s) drops INVITE/CANCEL/BYE and looks like "congestion" on the PBX.
+  # Trusted customer (grp 1) + carrier (grp 2) address rows skip pike; unknown IPs
+  # still get a high but finite flood ceiling.
   export OPENSIPS_PIKE_MODULE_BLOCK='loadmodule "pike.so"
-modparam("pike", "sampling_time_unit", 2)
-modparam("pike", "reqs_density_per_unit", 30)
+modparam("pike", "sampling_time_unit", 1)
+modparam("pike", "reqs_density_per_unit", 500)
 modparam("pike", "remove_latency", 4)'
-  export OPENSIPS_PIKE_CHECK_BLOCK='if (!pike_check_req()) {
-		xlog("L_WARN", "pike drop flood from=$si method=$rm\n");
-		drop();
-		exit;
+  export OPENSIPS_PIKE_CHECK_BLOCK='# Skip pike for provisioned customer/carrier IPs (dialer-safe)
+	if (!check_source_address(1) && !check_source_address(2)) {
+		if (!pike_check_req()) {
+			xlog("L_WARN", "pike drop flood from=$si method=$rm\n");
+			drop();
+			exit;
+		}
 	}'
-  log_info "pike anti-flood enabled (30 req / 2s sampling)"
+  log_info "pike anti-flood: skip address grp 1/2; else 500 req/s"
 else
   export OPENSIPS_PIKE_MODULE_BLOCK='# pike.so not installed'
   export OPENSIPS_PIKE_CHECK_BLOCK='# pike check skipped'
