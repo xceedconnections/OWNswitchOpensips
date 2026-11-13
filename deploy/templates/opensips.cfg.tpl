@@ -107,8 +107,13 @@ modparam("dialog", "db_mode", 2)
 # hard cap on call length (seconds) - safety net for billing
 modparam("dialog", "default_timeout", 7200)
 # Detect dead legs (ViciDial hangup without BYE reaching us) and clear zombie "Connected" dialogs
-modparam("dialog", "options_ping_interval", 20)
+modparam("dialog", "options_ping_interval", 15)
+# Re-INVITE ping: Asterisk often 200-OKs OPTIONS after hangup; missing re-INVITE drops the dialog
+modparam("dialog", "reinvite_ping_interval", 30)
 modparam("dialog", "delete_delay", 5)
+# 0=DID_ONLY (Call-ID). Strict/spooly tag match fails on Vicidial BYE → ghost Connected rows
+# ("tight matching failed for BYE"). Call-ID-only still ends the dialog when BYE arrives.
+modparam("dialog", "dlg_match_mode", 0)
 
 # CGRateS SessionS bi-directional JSON-RPC (listen_bijson), loopback only
 loadmodule "cgrates.so"

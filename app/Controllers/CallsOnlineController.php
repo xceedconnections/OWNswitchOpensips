@@ -472,8 +472,8 @@ final class CallsOnlineController extends BaseController
             return self::classifyState((int) $m[1], $dur);
         }
         if ($s === '') {
-            // No state — prefer trying/ringing over false "Connected" for short legs
-            return $dur >= 15 ? ['connected', 'Connected'] : ['trying', 'Trying'];
+            // No state — never invent "Connected" (ghost rows after BYE mismatch looked live)
+            return ['trying', 'Trying'];
         }
         if (str_contains($s, 'CONFIRM') || str_contains($s, 'CONNECT') || $s === 'INCALL' || $s === 'ANSWERED') {
             return ['connected', 'Connected'];
