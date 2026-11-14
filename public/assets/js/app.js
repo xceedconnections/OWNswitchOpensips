@@ -470,6 +470,35 @@
         window.setInterval(tick, 10000);
     });
 
+    /* Live dial stats (concurrent + CPS) — Calls Online / Dial Lab */
+    document.querySelectorAll('[data-os-dial-stats]').forEach(function (root) {
+        var url = root.getAttribute('data-url');
+        if (!url) { return; }
+        var interval = parseInt(root.getAttribute('data-interval') || '2000', 10);
+        if (!(interval >= 1000)) { interval = 2000; }
+        var tick = function () {
+            fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (data) {
+                    if (!data) { return; }
+                    ['concurrent', 'trying', 'ringing', 'connected', 'cps'].forEach(function (k) {
+                        root.querySelectorAll('[data-ds="' + k + '"]').forEach(function (node) {
+                            if (data[k] != null) { node.textContent = String(data[k]); }
+                        });
+                    });
+                    if (data.sip && data.sip.using != null) {
+                        root.querySelectorAll('[data-ds="sip-using"]').forEach(function (node) {
+                            var max = data.sip.unlimited_channels ? '∞' : String(data.sip.max_channels);
+                            node.textContent = String(data.sip.using) + ' / ' + max;
+                        });
+                    }
+                })
+                .catch(function () { /* keep last */ });
+        };
+        tick();
+        window.setInterval(tick, interval);
+    });
+
     /* Admin host resources — poll every 10s */
     document.querySelectorAll('[data-os-host]').forEach(function (root) {
         var url = root.getAttribute('data-url');

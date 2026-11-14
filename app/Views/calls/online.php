@@ -9,16 +9,23 @@ $monitorExt = (string) ($monitorExt ?? '');
         <h1 class="os-page-title">Calls Online <span class="os-count"><?= e((string) $count) ?></span></h1>
         <p class="os-page-sub">Live dialogs · talk time starts when the call is answered · auto-refresh <?= e((string) $refresh) ?>s</p>
     </div>
-    <form method="get" action="<?= e(url('/calls-online')) ?>" class="d-flex gap-2 align-items-center">
-        <?php if ($filterUser !== ''): ?><input type="hidden" name="user" value="<?= e($filterUser) ?>"><?php endif; ?>
-        <label class="small text-muted mb-0" for="refresh">Refresh</label>
-        <select class="form-select form-select-sm" id="refresh" name="refresh" style="width:7rem" onchange="this.form.submit()">
-            <?php foreach ([4, 10, 15, 30] as $sec): ?>
-                <option value="<?= e((string) $sec) ?>"<?= $refresh === $sec ? ' selected' : '' ?>><?= e((string) $sec) ?> sec</option>
-            <?php endforeach; ?>
-        </select>
-        <a class="btn btn-outline-secondary btn-sm" href="<?= e(url('/calls-online' . '?' . http_build_query(array_filter(['user' => $filterUser, 'refresh' => (string) $refresh])))) ?>"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</a>
-    </form>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+        <?php
+        $cu = function_exists('current_user') ? current_user() : null;
+        if (is_array($cu) && in_array((string) ($cu['role'] ?? ''), ['super_admin', 'admin'], true)): ?>
+            <a class="btn btn-outline-primary btn-sm" href="<?= e(url('/dial-lab')) ?>" title="Dummy CC/CPS test without trunk"><i class="bi bi-flask me-1"></i>Dial Lab</a>
+        <?php endif; ?>
+        <form method="get" action="<?= e(url('/calls-online')) ?>" class="d-flex gap-2 align-items-center">
+            <?php if ($filterUser !== ''): ?><input type="hidden" name="user" value="<?= e($filterUser) ?>"><?php endif; ?>
+            <label class="small text-muted mb-0" for="refresh">Refresh</label>
+            <select class="form-select form-select-sm" id="refresh" name="refresh" style="width:7rem" onchange="this.form.submit()">
+                <?php foreach ([4, 10, 15, 30] as $sec): ?>
+                    <option value="<?= e((string) $sec) ?>"<?= $refresh === $sec ? ' selected' : '' ?>><?= e((string) $sec) ?> sec</option>
+                <?php endforeach; ?>
+            </select>
+            <a class="btn btn-outline-secondary btn-sm" href="<?= e(url('/calls-online' . '?' . http_build_query(array_filter(['user' => $filterUser, 'refresh' => (string) $refresh])))) ?>"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</a>
+        </form>
+    </div>
 </div>
 
 <?php if ($canMonitor): ?>
@@ -39,11 +46,12 @@ $monitorExt = (string) ($monitorExt ?? '');
     <div class="alert alert-warning"><?= e($error) ?></div>
 <?php endif; ?>
 
-<div class="os-dash-grid os-dash-kpis mb-3">
-    <div class="os-kpi"><div class="lbl">Total</div><div class="val"><?= e((string) ($stats['total'] ?? 0)) ?></div><div class="sub">active dialogs</div></div>
-    <div class="os-kpi"><div class="lbl">Trying</div><div class="val"><?= e((string) ($stats['trying'] ?? 0)) ?></div><div class="sub">100 Trying</div></div>
-    <div class="os-kpi"><div class="lbl">Ringing</div><div class="val"><?= e((string) ($stats['ringing'] ?? 0)) ?></div><div class="sub">180 / 183 Progress</div></div>
-    <div class="os-kpi"><div class="lbl">Connected</div><div class="val"><?= e((string) ($stats['connected'] ?? 0)) ?></div><div class="sub">answered / confirmed</div></div>
+<div class="os-dash-grid os-dash-kpis mb-3" data-os-dial-stats data-url="<?= e(url('/api/live/dial-stats')) ?>" data-interval="2000">
+    <div class="os-kpi"><div class="lbl">Total</div><div class="val" data-ds="concurrent"><?= e((string) ($stats['total'] ?? 0)) ?></div><div class="sub">active dialogs</div></div>
+    <div class="os-kpi"><div class="lbl">Trying</div><div class="val" data-ds="trying"><?= e((string) ($stats['trying'] ?? 0)) ?></div><div class="sub">100 Trying</div></div>
+    <div class="os-kpi"><div class="lbl">Ringing</div><div class="val" data-ds="ringing"><?= e((string) ($stats['ringing'] ?? 0)) ?></div><div class="sub">180 / 183 Progress</div></div>
+    <div class="os-kpi"><div class="lbl">Connected</div><div class="val" data-ds="connected"><?= e((string) ($stats['connected'] ?? 0)) ?></div><div class="sub">answered / confirmed</div></div>
+    <div class="os-kpi"><div class="lbl">Live CPS</div><div class="val" data-ds="cps">—</div><div class="sub">calls this second</div></div>
 </div>
 
 <?php if ($users !== []): ?>
@@ -88,13 +96,14 @@ $monitorExt = (string) ($monitorExt ?? '');
             $sip = (string) ($c['sip_user'] ?? '');
             $fromDisp = (string) (($c['from_user'] !== '' ? $c['from_user'] : $c['from']) ?? '');
             $toDisp = (string) (($c['to_user'] !== '' ? $c['to_user'] : $c['to']) ?? '');
+            $isLab = !empty($c['is_lab']);
             ?>
-            <tr class="<?= e((string) ($c['color'] ?? '')) ?>">
-                <td class="os-mono"><?= e($sip !== '' ? $sip : '—') ?></td>
+            <tr class="<?= e((string) ($c['color'] ?? '')) ?>"<?= $isLab ? ' data-lab-started="' . e((string) (time() - (int) ($c['duration'] ?? 0))) . '"' : '' ?>>
+                <td class="os-mono"><?php if ($isLab): ?><span class="badge text-bg-secondary me-1">LAB</span><?php endif; ?><?= e($sip !== '' ? $sip : '—') ?></td>
                 <td class="os-mono"><?= e($fromDisp !== '' ? $fromDisp : '—') ?></td>
                 <td class="os-mono"><?= e($toDisp !== '' ? $toDisp : '—') ?></td>
                 <td><strong><?= e((string) ($c['state'] ?? '')) ?></strong></td>
-                <td class="os-num os-mono"><?= e(fmt_duration((int) ($c['duration'] ?? 0))) ?></td>
+                <td class="os-num os-mono"<?= $isLab ? ' data-lab-dur' : '' ?>><?= e(fmt_duration((int) ($c['duration'] ?? 0))) ?></td>
                 <td class="os-mono"><?php $cli = trim((string) ($c['caller_id'] ?? '')); echo e($cli !== '' ? $cli : '—'); ?></td>
                 <?php if ($canMonitor || !empty($canHangup)): ?>
                 <td class="text-end text-nowrap">
@@ -140,5 +149,20 @@ $refreshUrl = url('/calls-online?' . http_build_query(array_filter([
   document.querySelectorAll('form[data-os-hangup]').forEach(function (f) {
     f.addEventListener('submit', function () { window.clearTimeout(timer); });
   });
+  function fmt(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+  function tickLab() {
+    var now = Math.floor(Date.now() / 1000);
+    document.querySelectorAll('[data-lab-started]').forEach(function (tr) {
+      var started = parseInt(tr.getAttribute('data-lab-started') || '0', 10);
+      var cell = tr.querySelector('[data-lab-dur]');
+      if (cell && started > 0) { cell.textContent = fmt(now - started); }
+    });
+  }
+  tickLab();
+  window.setInterval(tickLab, 1000);
 })();
 </script>

@@ -8,6 +8,7 @@ use Ownswitch\Http\Request;
 use Ownswitch\Http\Response;
 use Ownswitch\Integrations\OpenSIPS\OpensipsProvisioner;
 use Ownswitch\Repositories\CustomerRepository;
+use Ownswitch\Services\Dial\LabDialogService;
 
 /** Live calls from OpenSIPS dialogs — stats, user filter, VICIdial-style colors. */
 final class CallsOnlineController extends BaseController
@@ -182,6 +183,16 @@ final class CallsOnlineController extends BaseController
         if (!$allowed && !$this->scope($r)->isGlobal() && !$this->scope($r)->isStaff()) {
             return $this->redirect($r, '/calls-online', 'You can only hang up your own calls.', 'danger');
         }
+        // Dial Lab dummy calls (no OpenSIPS dialog)
+        if (str_starts_with($callId, 'lab-') || str_starts_with($dialogId, 'lab:')) {
+            $ok = (new LabDialogService($this->db()))->endByCallid($callId);
+            return $this->redirect(
+                $r,
+                '/calls-online',
+                $ok ? 'Lab call ended.' : 'Lab call not found.',
+                $ok ? 'success' : 'warning'
+            );
+        }
         $prov = OpensipsProvisioner::fromConfig();
         if (!$prov->enabled()) {
             return $this->redirect($r, '/calls-online', 'OpenSIPS is not configured.', 'danger');
@@ -205,56 +216,70 @@ final class CallsOnlineController extends BaseController
         $prov = OpensipsProvisioner::fromConfig();
         $error = null;
         $calls = [];
+        $mine = $this->mySipUsernames($r);
+        $filterTokens = $this->filterTokens($filterUser);
         if (!$prov->enabled()) {
             $hint = $prov->initError() !== '' ? $prov->initError() : 'OPENSIPS_DB_* missing in /etc/ownswitch/ownswitch.env';
-            return [[], 'OpenSIPS is not configured: ' . $hint . ' — run stage 50 / fix-opensips-provision.sh'];
-        }
-        try {
-            $mine = $this->mySipUsernames($r);
-            $filterTokens = $this->filterTokens($filterUser);
-            foreach ($prov->listDialogs() as $d) {
-                if (!is_array($d)) {
-                    continue;
-                }
-                // Drop deleted/teardown dialogs immediately (OpenSIPS state 5 lingers in MI)
-                if (self::isDeadDialog($d)) {
-                    continue;
-                }
-                $n = self::normalize($d);
-                // Belt-and-suspenders: never paint Ending / state-5 leftovers as Connected
-                if (self::isDeadNormalized($n, $d)) {
-                    continue;
-                }
-                if ($n['callid'] === '') {
-                    continue;
-                }
-                // Never show Ending / deleted rows on the live board
-                if (($n['bucket'] ?? '') === 'other' && strcasecmp((string) ($n['state'] ?? ''), 'Ending') === 0) {
-                    continue;
-                }
-                // ViciDial: From/os_src often = CallerID digits — map signalling IP → SIP username
-                $sip = trim((string) ($n['sip_user'] ?? ''));
-                if ($sip === '' || preg_match('/^[+]?[0-9]{8,30}$/', $sip)) {
-                    $ip = self::callerSignallingIp($d);
-                    if ($ip !== null) {
-                        $byIp = $prov->usernameBySourceIp($ip);
-                        if ($byIp !== null && $byIp !== '') {
-                            $n['sip_user'] = $byIp;
-                        }
-                    }
-                }
-                if ($mine !== null) {
-                    if (!$this->matchesUsers($n, $mine)) {
+            $error = 'OpenSIPS is not configured: ' . $hint . ' — lab calls still listed below if any.';
+        } else {
+            try {
+                foreach ($prov->listDialogs() as $d) {
+                    if (!is_array($d)) {
                         continue;
                     }
+                    // Drop deleted/teardown dialogs immediately (OpenSIPS state 5 lingers in MI)
+                    if (self::isDeadDialog($d)) {
+                        continue;
+                    }
+                    $n = self::normalize($d);
+                    // Belt-and-suspenders: never paint Ending / state-5 leftovers as Connected
+                    if (self::isDeadNormalized($n, $d)) {
+                        continue;
+                    }
+                    if ($n['callid'] === '') {
+                        continue;
+                    }
+                    // Never show Ending / deleted rows on the live board
+                    if (($n['bucket'] ?? '') === 'other' && strcasecmp((string) ($n['state'] ?? ''), 'Ending') === 0) {
+                        continue;
+                    }
+                    // ViciDial: From/os_src often = CallerID digits — map signalling IP → SIP username
+                    $sip = trim((string) ($n['sip_user'] ?? ''));
+                    if ($sip === '' || preg_match('/^[+]?[0-9]{8,30}$/', $sip)) {
+                        $ip = self::callerSignallingIp($d);
+                        if ($ip !== null) {
+                            $byIp = $prov->usernameBySourceIp($ip);
+                            if ($byIp !== null && $byIp !== '') {
+                                $n['sip_user'] = $byIp;
+                            }
+                        }
+                    }
+                    if ($mine !== null) {
+                        if (!$this->matchesUsers($n, $mine)) {
+                            continue;
+                        }
+                    }
+                    if ($filterTokens !== null && !$this->matchesUsers($n, $filterTokens)) {
+                        continue;
+                    }
+                    $calls[] = $n;
+                }
+            } catch (\Throwable $e) {
+                $error = 'Failed to query live dialogs: ' . $e->getMessage();
+            }
+        }
+        // Dial Lab dummy Connected rows (no trunk) — same board / duration UX
+        try {
+            foreach ((new LabDialogService($this->db()))->listNormalized() as $n) {
+                if ($mine !== null && !$this->matchesUsers($n, $mine)) {
+                    continue;
                 }
                 if ($filterTokens !== null && !$this->matchesUsers($n, $filterTokens)) {
                     continue;
                 }
                 $calls[] = $n;
             }
-        } catch (\Throwable $e) {
-            $error = 'Failed to query live dialogs: ' . $e->getMessage();
+        } catch (\Throwable) {
         }
         usort($calls, static fn ($a, $b) => ($b['duration'] ?? 0) <=> ($a['duration'] ?? 0));
         return [$calls, $error];

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ownswitch\Services\Reports;
 
 use Ownswitch\Integrations\OpenSIPS\OpensipsProvisioner;
+use Ownswitch\Services\Dial\LabDialogService;
 use Ownswitch\Support\TenantScope;
 use PDO;
 
@@ -76,26 +77,33 @@ final class ConcurrentCallsService
             return 0;
         }
         $set = array_fill_keys(array_map('strval', $users), true);
-        $prov = OpensipsProvisioner::fromConfig();
-        if (!$prov->enabled() || !$prov->hasMi()) {
-            return 0;
-        }
         $n = 0;
-        try {
-            foreach ($prov->listDialogs() as $d) {
-                if (!is_array($d)) {
-                    continue;
+        $prov = OpensipsProvisioner::fromConfig();
+        if ($prov->enabled() && $prov->hasMi()) {
+            try {
+                foreach ($prov->listDialogs() as $d) {
+                    if (!is_array($d)) {
+                        continue;
+                    }
+                    $from = strtolower((string) ($d['from_uri'] ?? $d['caller'] ?? $d['From'] ?? $d['from'] ?? ''));
+                    $to = strtolower((string) ($d['to_uri'] ?? $d['callee'] ?? $d['To'] ?? $d['to'] ?? ''));
+                    $fu = self::userOfUri($from);
+                    $tu = self::userOfUri($to);
+                    if (($fu !== '' && isset($set[$fu])) || ($tu !== '' && isset($set[$tu]))) {
+                        $n++;
+                    }
                 }
-                $from = strtolower((string) ($d['from_uri'] ?? $d['caller'] ?? $d['From'] ?? $d['from'] ?? ''));
-                $to = strtolower((string) ($d['to_uri'] ?? $d['callee'] ?? $d['To'] ?? $d['to'] ?? ''));
-                $fu = self::userOfUri($from);
-                $tu = self::userOfUri($to);
-                if (($fu !== '' && isset($set[$fu])) || ($tu !== '' && isset($set[$tu]))) {
+            } catch (\Throwable) {
+            }
+        }
+        try {
+            foreach ((new LabDialogService($this->pdo))->listNormalized() as $lab) {
+                $u = strtolower((string) ($lab['sip_user'] ?? ''));
+                if ($u !== '' && isset($set[$u])) {
                     $n++;
                 }
             }
         } catch (\Throwable) {
-            return 0;
         }
         return $n;
     }

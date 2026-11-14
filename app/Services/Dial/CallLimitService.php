@@ -48,13 +48,86 @@ final class CallLimitService
         if ($maxCh >= 0) {
             // Current INVITE already has create_dialog + os_src, so count includes self.
             // Deny only when strictly over the limit (using > max).
-            $using = $this->countSipDialogs($username);
+            // Lab dialogs (Dial Lab, no trunk) also count so concurrent tests match production gates.
+            $using = $this->countSipDialogs($username) + $this->countLabDialogs($username);
             if ($using > $maxCh) {
                 return ['allow' => false, 'reason' => "channels {$using}>{$maxCh}"];
             }
         }
 
         return ['allow' => true, 'reason' => 'ok'];
+    }
+
+    /**
+     * Live snapshot for dashboard / Dial Lab (does not bump CPS).
+     *
+     * @return array{
+     *   username:string,
+     *   max_channels:int,
+     *   max_cps:int,
+     *   using:int,
+     *   using_live:int,
+     *   using_lab:int,
+     *   cps:int,
+     *   unlimited_channels:bool,
+     *   unlimited_cps:bool
+     * }
+     */
+    public function snapshotSipUser(string $username): array
+    {
+        $username = strtolower(trim($username));
+        $limits = $username !== '' ? $this->sipLimits($username) : null;
+        $maxCh = (int) ($limits['max_channels'] ?? -1);
+        $maxCps = (int) ($limits['max_cps'] ?? -1);
+        if ($maxCps === 0) {
+            $maxCps = 1;
+        }
+        $live = $username !== '' ? $this->countSipDialogs($username) : 0;
+        $lab = $username !== '' ? $this->countLabDialogs($username) : 0;
+        return [
+            'username' => $username,
+            'max_channels' => $maxCh,
+            'max_cps' => $maxCps,
+            'using' => $live + $lab,
+            'using_live' => $live,
+            'using_lab' => $lab,
+            'cps' => $username !== '' ? $this->peekCps('sip:' . $username) : 0,
+            'unlimited_channels' => $maxCh < 0,
+            'unlimited_cps' => $maxCps < 0,
+        ];
+    }
+
+    /**
+     * Fire N authorize attempts as fast as possible (CPS stress). Does bump CPS buckets.
+     *
+     * @return array{attempts:int,allowed:int,denied:int,first_deny:?string,samples:list<array{allow:bool,reason:string}>}
+     */
+    public function burstSipUser(string $username, int $attempts): array
+    {
+        $attempts = max(1, min(200, $attempts));
+        $allowed = 0;
+        $denied = 0;
+        $firstDeny = null;
+        $samples = [];
+        for ($i = 0; $i < $attempts; $i++) {
+            $res = $this->authorizeSipUser($username);
+            if ($res['allow']) {
+                $allowed++;
+            } else {
+                $denied++;
+                $firstDeny ??= $res['reason'];
+            }
+            if ($i < 20 || !$res['allow']) {
+                $samples[] = $res;
+            }
+        }
+        return [
+            'attempts' => $attempts,
+            'allowed' => $allowed,
+            'denied' => $denied,
+            'first_deny' => $firstDeny,
+            'samples' => $samples,
+        ];
     }
 
     /**
@@ -210,6 +283,36 @@ final class CallLimitService
         } catch (\Throwable) {
             return 0;
         }
+    }
+
+    private function countLabDialogs(string $username): int
+    {
+        try {
+            return (new LabDialogService($this->portalDb))->countForSip($username);
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /** Read current-second CPS without incrementing. */
+    public function peekCps(string $key): int
+    {
+        $bucket = $key . ':' . time();
+        $redis = $this->redis();
+        if ($redis !== null) {
+            try {
+                $n = $redis->get('ownswitch:cps:' . $bucket);
+                return max(0, (int) $n);
+            } catch (\Throwable) {
+            }
+        }
+        $dir = is_dir('/dev/shm') ? '/dev/shm/ownswitch-cps' : sys_get_temp_dir() . '/ownswitch-cps';
+        $file = $dir . '/' . preg_replace('/[^A-Za-z0-9_.:-]/', '_', $bucket) . '.cnt';
+        if (!is_file($file)) {
+            return 0;
+        }
+        $raw = @file_get_contents($file);
+        return max(0, (int) trim((string) $raw));
     }
 
     /** Increment 1-second CPS bucket; returns count in current second. */

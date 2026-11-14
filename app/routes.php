@@ -46,6 +46,7 @@ use Ownswitch\Controllers\StatsController;
 use Ownswitch\Controllers\SystemController;
 use Ownswitch\Controllers\TariffController;
 use Ownswitch\Controllers\CallsOnlineController;
+use Ownswitch\Controllers\DialLabController;
 use Ownswitch\Controllers\DidController;
 use Ownswitch\Controllers\DocsController;
 use Ownswitch\Controllers\PrefixImportController;
@@ -93,6 +94,7 @@ $router->group('', ['auth', 'tenant', 'features', 'csrf'], function (Router $r) 
     $live = new LiveMetricsController();
     $r->get('/api/live/host', [$live, 'host'], [$STAFF]);
     $r->get('/api/live/concurrent', [$live, 'concurrent'], [$role(Menu::SIP_USERS)]);
+    $r->get('/api/live/dial-stats', [$live, 'dialStats'], [$role(Menu::SIP_USERS)]);
 
     // Clients — Magnus Users (+ legacy /customers redirects)
     $users = new CustomerController();
@@ -113,6 +115,12 @@ $router->group('', ['auth', 'tenant', 'features', 'csrf'], function (Router $r) 
     $r->post('/calls-online/hangup', [$callsOnline, 'hangup'], [$role(Menu::SIP_USERS)]);
     $r->post('/calls-online/monitor', [$callsOnline, 'monitor'], [$STAFF]);
     $r->post('/calls-online/monitor-ext', [$callsOnline, 'saveMonitorExt'], [$STAFF]);
+    $dialLab = new DialLabController();
+    $r->get('/dial-lab', [$dialLab, 'index'], [$STAFF]);
+    $r->post('/dial-lab/start', [$dialLab, 'start'], [$STAFF]);
+    $r->post('/dial-lab/stop', [$dialLab, 'stop'], [$STAFF]);
+    $r->post('/dial-lab/cps-burst', [$dialLab, 'cpsBurst'], [$STAFF]);
+    $r->post('/dial-lab/check', [$dialLab, 'checkLimit'], [$STAFF]);
     $crud($r, '/ip-endpoints', new IpAuthController(), $role(Menu::SIP_USERS)); // IP allowlist
     // Legacy /ip-auth bookmarks
     $r->get('/ip-auth', static fn () => Response::redirect(url('/ip-endpoints')));

@@ -33,6 +33,7 @@ final class Menu
                 ['SIP Users', '/sip-users', self::SIP_USERS],
                 ['Web-Dialer', '/web-dialer', self::SIP_USERS],
                 ['Calls Online', '/calls-online', self::SIP_USERS],
+                ['Dial Lab', '/dial-lab', self::STAFF],
                 ['IP Endpoints', '/ip-endpoints', self::SIP_USERS],
             ]],
             ['DIDs', [
