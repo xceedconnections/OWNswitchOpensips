@@ -9,6 +9,24 @@
         }
     });
 
+    document.querySelectorAll('form[data-submitter-confirm]').forEach(function (form) {
+        form.addEventListener('submit', function (ev) {
+            var btn = ev.submitter;
+            var msg = btn && btn.getAttribute ? btn.getAttribute('data-confirm') : null;
+            if (msg && !window.confirm(msg)) {
+                ev.preventDefault();
+            }
+        });
+    });
+    document.querySelectorAll('[data-check-all]').forEach(function (master) {
+        master.addEventListener('change', function () {
+            var root = master.closest('form') || document;
+            var sel = master.getAttribute('data-check-all');
+            if (!sel) { return; }
+            root.querySelectorAll(sel).forEach(function (cb) { cb.checked = master.checked; });
+        });
+    });
+
     document.addEventListener('submit', function (ev) {
         var form = ev.target;
         var back = form && form.getAttribute ? form.getAttribute('data-return') : null;

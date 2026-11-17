@@ -9,10 +9,9 @@ use PDO;
 /**
  * Pick outbound CLI from a CallerID group.
  *
- * Rules (matches portal UI):
- * - Longest `prefix` that the dialled number starts with wins (prefix `*` = default).
- * - Several CLIs sharing that prefix rotate (round-robin).
- * - If nothing matches, pick a random active CLI from the group.
+ * The group is a pool of numbers (no dialled-prefix column):
+ * - Prefer CLIs that share the longest starting digits with the dialled number (7…3), rotated.
+ * - Otherwise rotate every active CLI in the group.
  */
 final class CallerIdPickerService
 {
@@ -47,6 +46,29 @@ final class CallerIdPickerService
     }
 
     /**
+     * Force a specific group (trunk CallerID group). Inactive groups yield null.
+     *
+     * @return array{cli:string,prefix:string,reason:string}|null
+     */
+    public function pickFromGroup(int $groupId, string $destination): ?array
+    {
+        if ($groupId <= 0) {
+            return null;
+        }
+        try {
+            $st = $this->pdo->prepare('SELECT status FROM callerid_groups WHERE id = ? LIMIT 1');
+            $st->execute([$groupId]);
+            $status = $st->fetchColumn();
+        } catch (\Throwable) {
+            return null;
+        }
+        if ($status !== 'active') {
+            return null;
+        }
+        return $this->pick($groupId, $destination);
+    }
+
+    /**
      * @return array{cli:string,prefix:string,reason:string}|null
      */
     public function pick(int $groupId, string $destination): ?array
@@ -55,14 +77,11 @@ final class CallerIdPickerService
             return null;
         }
         $dst = preg_replace('/\D+/', '', $destination) ?? '';
-        if ($dst === '') {
-            return null;
-        }
         try {
             $st = $this->pdo->prepare(
-                "SELECT id, prefix, cli_number FROM callerid_group_numbers
+                "SELECT id, cli_number FROM callerid_group_numbers
                  WHERE callerid_group_id = ? AND status = 'active'
-                 ORDER BY LENGTH(prefix) DESC, id ASC"
+                 ORDER BY id ASC"
             );
             $st->execute([$groupId]);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -71,41 +90,6 @@ final class CallerIdPickerService
         }
         if ($rows === []) {
             return null;
-        }
-
-        $bestLen = -1;
-        $matches = [];
-        foreach ($rows as $r) {
-            $pfx = trim((string) ($r['prefix'] ?? ''));
-            if ($pfx === '' || $pfx === '*') {
-                continue;
-            }
-            $pfxDigits = preg_replace('/\D+/', '', $pfx) ?? '';
-            if ($pfxDigits === '') {
-                continue;
-            }
-            if (!str_starts_with($dst, $pfxDigits)) {
-                continue;
-            }
-            $len = strlen($pfxDigits);
-            if ($len > $bestLen) {
-                $bestLen = $len;
-                $matches = [$r];
-            } elseif ($len === $bestLen) {
-                $matches[] = $r;
-            }
-        }
-
-        if ($matches !== []) {
-            $chosen = $this->rotate($groupId, 'p' . $bestLen, $matches);
-            $cli = preg_replace('/\D+/', '', (string) ($chosen['cli_number'] ?? '')) ?? '';
-            if ($cli !== '') {
-                return [
-                    'cli' => $cli,
-                    'prefix' => (string) ($chosen['prefix'] ?? ''),
-                    'reason' => 'prefix-match-rotate',
-                ];
-            }
         }
 
         // Locality: CLI and dialled share the same starting digits (try 7…3).
@@ -135,26 +119,15 @@ final class CallerIdPickerService
             }
         }
 
-        // Fallback: any active CLI (prefer explicit '*' rows, else all)
-        $fallback = [];
-        foreach ($rows as $r) {
-            $pfx = trim((string) ($r['prefix'] ?? ''));
-            if ($pfx === '*' || $pfx === '') {
-                $fallback[] = $r;
-            }
-        }
-        if ($fallback === []) {
-            $fallback = $rows;
-        }
-        $chosen = $fallback[random_int(0, count($fallback) - 1)];
+        $chosen = $this->rotate($groupId, 'all', $rows);
         $cli = preg_replace('/\D+/', '', (string) ($chosen['cli_number'] ?? '')) ?? '';
         if ($cli === '') {
             return null;
         }
         return [
             'cli' => $cli,
-            'prefix' => (string) ($chosen['prefix'] ?? '*'),
-            'reason' => 'random-fallback',
+            'prefix' => '',
+            'reason' => 'rotate-all',
         ];
     }
 

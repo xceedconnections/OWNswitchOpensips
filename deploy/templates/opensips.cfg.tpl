@@ -383,9 +383,11 @@ route {
 		$dlg_val(os_dtmf) = "1";
 	}
 
-	# Softphone Display Name / fixed / passthrough, then CallerID-group rotation (prefix match)
+	# Softphone Display Name / fixed / passthrough, then SIP-user CallerID group.
+	# os_cli_user is the baseline restored on trunk failover before a trunk group (if any) replaces it.
 	route(apply_sip_cid);
 	route(apply_callerid_group);
+	$dlg_val(os_cli_user) = $dlg_val(os_cli);
 
 	# ACC before rate/DNC/limits rejects → failed CDRs for unrated / blocked / congestion
 	if (!cgrates_auth()) {
@@ -432,10 +434,12 @@ route {
 	# Trunk DNC uses rewritten dialled digits ($dlg_val(os_dst)) — before strip
 	route(check_dnc);
 	route(apply_ruri_strip);
+	route(restore_user_cli);
 	route(apply_sip_cid);
 	route(apply_callerid_group);
 	route(check_cid_len);
 	route(apply_trunk_attrs);
+	route(apply_trunk_callerid);
 	route(check_trunk_cid_len);
 	route(check_rate_cap);
 	# Trunk Channels + CPS — on exceed try next gw in this trunk group
@@ -813,7 +817,8 @@ route[apply_ruri_strip] {
 }
 
 # Apply Magnus Fromuser / Fromdomain / CID prefixes from gateway attrs (fu=;fd=;cidadd=;cidrem=)
-# When fu= is set it ALWAYS overrides SIP-user CallerID and PBX-sent From (ViciDial etc.).
+# When fu= is set it overrides SIP-user CallerID unless the trunk has a CallerID group (cidg=),
+# which apply_trunk_callerid forces afterwards onto From, PAI, RPID, and the CDR.
 # Start from os_cli (display_name / fixed already applied) — $fU is still the SIP username.
 route[apply_trunk_attrs] {
 	if ($avp(dr_gw_attrs) == NULL) {
@@ -883,8 +888,15 @@ route[apply_trunk_attrs] {
 }
 
 # SIP-user CallerID digit length (from subscriber cid_min_len / cid_max_len)
+# Skipped when the chosen trunk has cidg= — that group's CLI replaces the customer CLI.
 # Use os_cli (presented CLI) — $fU is still the SIP username after From rewrite.
 route[check_cid_len] {
+	if ($avp(dr_gw_attrs) != NULL) {
+		$var(tcidg_skip) = $(avp(dr_gw_attrs){param.value,cidg});
+		if ($var(tcidg_skip) != NULL && $(var(tcidg_skip){s.int}) > 0) {
+			return;
+		}
+	}
 	if ($dlg_val(os_cli) != NULL && $(dlg_val(os_cli){s.len}) > 0) {
 		$var(clid) = $(dlg_val(os_cli){re.subst,#[^0-9]##g});
 	} else {
@@ -919,8 +931,36 @@ route[check_cid_len] {
 # Trunk Channels + CPS with next-route failover (bin/dial-trunk-limit-check.php)
 @@OPENSIPS_TRUNK_LIMIT_ROUTE@@
 
-# CallerID group: longest dialled-prefix match + rotation; else random (bin/dial-callerid-pick.php)
+# CallerID group: SIP-user pool (bin/dial-callerid-pick.php). Trunk cidg= is applied later.
 @@OPENSIPS_CALLERID_ROUTE@@
+
+# Undo a previous trunk CallerID-group force before the next trunk's rules run.
+route[restore_user_cli] {
+	if ($dlg_val(os_cli_user) == NULL || $(dlg_val(os_cli_user){s.len}) == 0) {
+		return;
+	}
+	$dlg_val(os_cli) = $dlg_val(os_cli_user);
+	$acc_extra(cli) = $dlg_val(os_cli_user);
+	if ($dlg_val(os_cli_forced) != "1") {
+		return;
+	}
+	$dlg_val(os_cli_forced) = "0";
+	$var(rudom) = $fd;
+	if ($var(rudom) == NULL || $(var(rudom){s.len}) == 0) {
+		$var(rudom) = $td;
+	}
+	$var(ru) = $dlg_val(os_cli_user);
+	remove_hf("From");
+	append_hf("From: <sip:$var(ru)@$var(rudom)>;tag=$ft\r\n");
+	remove_hf("P-Asserted-Identity");
+	append_hf("P-Asserted-Identity: <sip:$var(ru)@$var(rudom)>\r\n");
+	remove_hf("Remote-Party-ID");
+	append_hf("Remote-Party-ID: <sip:$var(ru)@$var(rudom)>;party=calling;privacy=off;screen=yes\r\n");
+	xlog("L_INFO", "CLI restore baseline=$var(ru) before next trunk\n");
+}
+
+# Trunk CallerID group (attrs cidg=): force that pool onto the vendor and the CDR.
+@@OPENSIPS_TRUNK_CALLERID_ROUTE@@
 
 # IP-auth SIP profile (dncid/cid/media) when digest load_credentials did not run
 @@OPENSIPS_SIP_PROFILE_ROUTE@@
@@ -1062,10 +1102,12 @@ failure_route[carrier_failover] {
 	if (use_next_gw()) {
 		route(check_dnc);
 		route(apply_ruri_strip);
+		route(restore_user_cli);
 		route(apply_sip_cid);
 		route(apply_callerid_group);
 		route(check_cid_len);
 		route(apply_trunk_attrs);
+		route(apply_trunk_callerid);
 		route(check_trunk_cid_len);
 		route(check_rate_cap);
 		route(check_trunk_limits);

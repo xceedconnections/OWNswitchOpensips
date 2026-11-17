@@ -23,7 +23,7 @@ final class CarrierRepository extends BaseRepository
                 'auth_username', 'auth_secret_enc', 'auth_mode', 'outbound_proxy',
                 'register_status', 'register_checked_at', 'max_channels', 'max_cps', 'max_call_duration',
                 'delayed_bye', 'delayed_bye_mcd', 'delayed_bye_count_buying',
-                'rate_cap', 'dnc_group_id', 'dst_format', 'media_policy', 'codecs',
+                'rate_cap', 'dnc_group_id', 'callerid_group_id', 'dst_format', 'media_policy', 'codecs',
                 'initial_increment', 'subsequent_increment', 'default_rate', 'connect_fee', 'priority', 'status'],
             'none', ['name', 'host'], ['id', 'name', 'host', 'auth_mode', 'status', 'carrier_id']);
     }

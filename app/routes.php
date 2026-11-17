@@ -131,7 +131,10 @@ $router->group('', ['auth', 'tenant', 'features', 'csrf'], function (Router $r) 
     $r->get('/ip-auth/{rest}', static fn () => Response::redirect(url('/ip-endpoints')));
     $cidGroups = new CallerIdGroupController();
     $crud($r, '/callerid-groups', $cidGroups, $STAFF);
+    $r->get('/callerid-groups/{id}/export', [$cidGroups, 'exportNumbers'], [$STAFF]);
+    $r->post('/callerid-groups/{id}/import', [$cidGroups, 'importNumbers'], [$STAFF]);
     $r->post('/callerid-groups/{id}/numbers', [$cidGroups, 'addNumber'], [$STAFF]);
+    $r->post('/callerid-groups/{id}/numbers/bulk-delete', [$cidGroups, 'bulkDelete'], [$STAFF]);
     $r->post('/callerid-groups/{id}/numbers/{numberId}/delete', [$cidGroups, 'deleteNumber'], [$STAFF]);
     $r->get('/my-rates', [MyRatesController::class, 'index'], [$role(Menu::CUSTOMER_RATES)]);
     $r->get('/my-rates/export', [MyRatesController::class, 'export'], [$role(Menu::CUSTOMER_RATES)]);

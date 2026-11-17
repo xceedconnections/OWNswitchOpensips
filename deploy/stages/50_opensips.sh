@@ -778,10 +778,12 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 		if ($(var(cap_tries){s.int}) < 8 && use_next_gw()) {
 			route(check_dnc);
 			route(apply_ruri_strip);
+			route(restore_user_cli);
 			route(apply_sip_cid);
 			route(apply_callerid_group);
 			route(check_cid_len);
 			route(apply_trunk_attrs);
+			route(apply_trunk_callerid);
 			route(check_trunk_cid_len);
 			route(check_rate_cap);
 			return;
@@ -892,6 +894,66 @@ if [[ -z "${OPENSIPS_CALLERID_ROUTE:-}" ]]; then
   fi
 fi
 
+# Trunk CallerID group (attrs cidg=) — same script, group id instead of SIP user.
+# Runs after apply_trunk_attrs so it replaces From user, display name, force portal, and the SIP-user group.
+if [[ -z "${OPENSIPS_TRUNK_CALLERID_ROUTE:-}" ]]; then
+  _tcid_script="/opt/ownswitch/current/bin/dial-callerid-pick.php"
+  [[ -f "${_tcid_script}" ]] || _tcid_script="/opt/ownswitch-src/bin/dial-callerid-pick.php"
+  if (( HAVE_EXEC )) && [[ -f "${_tcid_script}" ]]; then
+    export OPENSIPS_TRUNK_CALLERID_ROUTE='route[apply_trunk_callerid] {
+	if ($avp(dr_gw_attrs) == NULL) {
+		return;
+	}
+	$var(tcidg) = $(avp(dr_gw_attrs){param.value,cidg});
+	if ($var(tcidg) == NULL || $(var(tcidg){s.int}) <= 0) {
+		return;
+	}
+	$var(tcid_dst) = $dlg_val(os_dst);
+	if ($var(tcid_dst) == NULL || $(var(tcid_dst){s.len}) < 3) {
+		$var(tcid_dst) = $rU;
+	}
+	$var(tcid_out) = NULL;
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_tcid_script}"' group $var(tcidg) $var(tcid_dst)", , $var(tcid_out))) {
+		xlog("L_WARN", "trunk CallerID group exec failed cidg=$var(tcidg)\n");
+		return;
+	}
+	$var(tcid_cli) = $(var(tcid_out){re.subst,/[^0-9+]//g});
+	if ($var(tcid_cli) == NULL || $(var(tcid_cli){s.len}) < 3 || $(var(tcid_cli){s.len}) > 30) {
+		xlog("L_WARN", "trunk CallerID group empty cidg=$var(tcidg) dst=$var(tcid_dst)\n");
+		return;
+	}
+	if (!($var(tcid_cli) =~ "^[+0-9]{3,30}$")) {
+		return;
+	}
+	$var(tcid_dom) = $fd;
+	if ($var(tcid_dom) == NULL || $(var(tcid_dom){s.len}) == 0) {
+		$var(tcid_dom) = $td;
+	}
+	$var(tfd) = $(avp(dr_gw_attrs){param.value,fd});
+	if ($var(tfd) != NULL && $(var(tfd){s.len}) > 0) {
+		$var(tcid_dom) = $(var(tfd){s.unescape.param});
+	}
+	$dlg_val(os_cli) = $var(tcid_cli);
+	$acc_extra(cli) = $var(tcid_cli);
+	$dlg_val(os_cli_forced) = "1";
+	remove_hf("From");
+	append_hf("From: <sip:$var(tcid_cli)@$var(tcid_dom)>;tag=$ft\r\n");
+	remove_hf("P-Asserted-Identity");
+	append_hf("P-Asserted-Identity: <sip:$var(tcid_cli)@$var(tcid_dom)>\r\n");
+	remove_hf("Remote-Party-ID");
+	append_hf("Remote-Party-ID: <sip:$var(tcid_cli)@$var(tcid_dom)>;party=calling;privacy=off;screen=yes\r\n");
+	xlog("L_INFO", "trunk CallerID group FORCE cli=$var(tcid_cli) cidg=$var(tcidg) dst=$var(tcid_dst)\n");
+}'
+    chmod 644 "${_tcid_script}" 2>/dev/null || true
+    log_info "Trunk CallerID group: exec → ${_tcid_script}"
+  else
+    export OPENSIPS_TRUNK_CALLERID_ROUTE='route[apply_trunk_callerid] {
+	return;
+}'
+    log_warn "Trunk CallerID group: exec/dial-callerid-pick missing — stub only"
+  fi
+fi
+
 # Trunk Channels + CPS with next-gw failover (exec → bin/dial-trunk-limit-check.php)
 if [[ -z "${OPENSIPS_TRUNK_LIMIT_ROUTE:-}" ]]; then
   _trk_lim_script="/opt/ownswitch/current/bin/dial-trunk-limit-check.php"
@@ -915,10 +977,12 @@ if [[ -z "${OPENSIPS_TRUNK_LIMIT_ROUTE:-}" ]]; then
 		if ($(var(trk_lim_tries){s.int}) < 8 && use_next_gw()) {
 			route(check_dnc);
 			route(apply_ruri_strip);
+			route(restore_user_cli);
 			route(apply_sip_cid);
 			route(apply_callerid_group);
 			route(check_cid_len);
 			route(apply_trunk_attrs);
+			route(apply_trunk_callerid);
 			route(check_trunk_cid_len);
 			route(check_rate_cap);
 			route(check_trunk_limits);
@@ -1028,10 +1092,13 @@ log_info "OpenSIPS DEFAULT_MEDIA_POLICY=${DEFAULT_MEDIA_POLICY}"
 : "${OPENSIPS_CALLERID_ROUTE:=route[apply_callerid_group] {
 	return;
 }}"
+: "${OPENSIPS_TRUNK_CALLERID_ROUTE:=route[apply_trunk_callerid] {
+	return;
+}}"
 : "${OPENSIPS_SIP_PROFILE_ROUTE:=route[load_sip_profile] {
 	return;
 }}"
-export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE OPENSIPS_CALLERID_ROUTE OPENSIPS_SIP_PROFILE_ROUTE
+export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE OPENSIPS_CALLERID_ROUTE OPENSIPS_TRUNK_CALLERID_ROUTE OPENSIPS_SIP_PROFILE_ROUTE
 
 # ---------------------------------------------------------------------------
 # 6. Render + validate + activate cfg

@@ -92,8 +92,17 @@ final class CarrierController extends CrudController
             ['name' => 'add_prefix', 'label' => 'Add prefix', 'max' => 32, 'help' => 'Prepended to the dialled number toward the vendor (e.g. 9 → 912138007447)', 'section' => 'Dial & CLI'],
             ['name' => 'remove_prefix', 'label' => 'Remove prefixes', 'max' => 120, 'help' => 'Comma-separated tech prefixes to strip before send (e.g. 22,011,00). First match wins. Then Add prefix is applied.', 'section' => 'Dial & CLI'],
             ['name' => 'dst_format', 'label' => 'Destination format', 'type' => 'select', 'options' => DstFormat::OPTIONS, 'default' => DstFormat::AS_IS, 'list' => true, 'help' => 'How the dialled number is sent to this vendor after strip/add prefix. Applied after the SIP user’s Destination format. Example: E.164 with + turns 12135550123 into +12135550123.', 'section' => 'Dial & CLI'],
-            ['name' => 'from_user', 'label' => 'From user', 'max' => 64, 'help' => 'Forces outbound CallerID / From user to vendors. Overrides SIP user CallerID and anything the PBX (e.g. ViciDial) sends.', 'section' => 'Dial & CLI'],
+            ['name' => 'from_user', 'label' => 'From user', 'max' => 64, 'help' => 'Forces outbound CallerID / From user when this trunk has no CallerID group. A CallerID group on this trunk replaces it, including what the customer or ViciDial sends.', 'section' => 'Dial & CLI'],
             ['name' => 'from_domain', 'label' => 'From domain', 'max' => 128, 'help' => 'Domain part of SIP From / RPID / PAI when rewriting CLI toward this vendor. Blank uses a safe default.', 'section' => 'Dial & CLI'],
+            [
+                'name' => 'callerid_group_id',
+                'label' => 'CallerID group',
+                'type' => 'select',
+                'options' => $this->callerIdGroupOptions(),
+                'list' => true,
+                'help' => 'If set, every call on this trunk uses a number from this group. It replaces the customer CLI, the SIP user CallerID group, Display name, Force portal, and ViciDial. The same number is sent to the vendor and stored on the CDR. Leave blank to keep the SIP user / customer CallerID.',
+                'section' => 'Dial & CLI',
+            ],
             ['name' => 'cid_add_prefix', 'label' => 'CID add prefix', 'max' => 32, 'help' => 'Prepended to outbound CallerID digits after CID remove (OpenSIPS origination_caller_id_*).', 'section' => 'Dial & CLI'],
             ['name' => 'cid_remove_prefix', 'label' => 'CID remove prefix', 'max' => 32, 'help' => 'Strip this digit prefix from CallerID before CID add / From user.', 'section' => 'Dial & CLI'],
             ['name' => 'cid_min_len', 'label' => 'Min CallerID length (digits)', 'type' => 'number', 'min' => 0, 'max' => 32, 'help' => 'After trunk CID rewrite (and From user if set). Leave blank to disable. Too short → 484.', 'section' => 'Dial & CLI'],
@@ -156,6 +165,25 @@ final class CarrierController extends CrudController
     }
 
     /** @return array<string,string> */
+    private function callerIdGroupOptions(): array
+    {
+        $out = ['' => '— None —'];
+        try {
+            (new \Ownswitch\Repositories\CallerIdGroupRepository($this->db()))->ensureTrunkColumn();
+            $st = $this->db()->query("SELECT id, name, status FROM callerid_groups ORDER BY name LIMIT 500");
+            foreach ($st->fetchAll() as $g) {
+                $label = (string) $g['name'];
+                if (($g['status'] ?? '') !== 'active') {
+                    $label .= ' (disabled)';
+                }
+                $out[(string) $g['id']] = $label;
+            }
+        } catch (\Throwable) {
+        }
+        return $out;
+    }
+
+    /** @return array<string,string> */
     private function dncGroupOptions(): array
     {
         try {
@@ -189,6 +217,11 @@ final class CarrierController extends CrudController
                 $row['dnc_group_id'] = '';
             } else {
                 $row['dnc_group_id'] = (string) $row['dnc_group_id'];
+            }
+            if (($row['callerid_group_id'] ?? null) === null || $row['callerid_group_id'] === '') {
+                $row['callerid_group_id'] = '';
+            } else {
+                $row['callerid_group_id'] = (string) $row['callerid_group_id'];
             }
             $host = (string) ($row['host'] ?? '');
             $port = (int) ($row['port'] ?? 5060);
@@ -363,6 +396,16 @@ final class CarrierController extends CrudController
                     if (!isset($opts[(string) $data['dnc_group_id']])) {
                         throw new \DomainException('Select a valid DNC group.');
                     }
+                }
+            }
+            if (!array_key_exists('callerid_group_id', $data) || $data['callerid_group_id'] === '' || $data['callerid_group_id'] === null) {
+                $data['callerid_group_id'] = null;
+            } else {
+                $data['callerid_group_id'] = (int) $data['callerid_group_id'];
+                if ($data['callerid_group_id'] <= 0) {
+                    $data['callerid_group_id'] = null;
+                } elseif (!isset($this->callerIdGroupOptions()[(string) $data['callerid_group_id']])) {
+                    throw new \DomainException('Select a valid CallerID group.');
                 }
             }
             $data['dst_format'] = DstFormat::normalize(isset($data['dst_format']) ? (string) $data['dst_format'] : null);

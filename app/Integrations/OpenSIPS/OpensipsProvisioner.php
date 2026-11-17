@@ -511,6 +511,11 @@ final class OpensipsProvisioner
         if ($tid > 0) {
             $parts[] = 'tid=' . $tid;
         }
+        // Kept next to tid so a long attrs string cannot drop the forced CallerID group.
+        $cidg = (int) ($trunk['callerid_group_id'] ?? 0);
+        if ($cidg > 0) {
+            $parts[] = 'cidg=' . $cidg;
+        }
         $mode = strtolower(trim((string) ($trunk['auth_mode'] ?? 'ip')));
         $fromUser = trim((string) ($trunk['from_user'] ?? ''));
         $fromDomain = trim((string) ($trunk['from_domain'] ?? ''));

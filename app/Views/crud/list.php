@@ -143,6 +143,10 @@ $colCount = ($hideIdColumn ? 0 : 1) + count($cols) + 1;
     </div>
 </div>
 
+<?php if (!empty($listTopPartial) && preg_match('#^[a-z0-9_/\-]+$#i', (string) $listTopPartial)) {
+    require __DIR__ . '/../' . $listTopPartial . '.php';
+} ?>
+
 <?php
 $bulkDelete = !empty($bulkDelete);
 $bulkRateUpdate = !empty($bulkRateUpdate);
