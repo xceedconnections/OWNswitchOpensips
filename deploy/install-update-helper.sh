@@ -39,3 +39,8 @@ ls -la /usr/local/sbin/ownswitch-update
 if [[ -f "$SRC/deploy/install-ssl-webrtc-helpers.sh" ]]; then
   bash "$SRC/deploy/install-ssl-webrtc-helpers.sh"
 fi
+
+# Restart helper (Settings → Restart). Always refresh from this SRC.
+if [[ -f "$SRC/deploy/install-restart-helper.sh" ]]; then
+  bash "$SRC/deploy/install-restart-helper.sh"
+fi

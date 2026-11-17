@@ -32,3 +32,8 @@ echo "OK: /usr/local/sbin/ownswitch-ssl"
 echo "OK: /usr/local/sbin/ownswitch-webrtc"
 echo "OK: sudoers ownswitch-ssl"
 ls -la /usr/local/sbin/ownswitch-ssl /usr/local/sbin/ownswitch-webrtc
+
+# Also refresh Settings → Restart helper when present in this SRC.
+if [[ -f "$SRC/deploy/install-restart-helper.sh" ]]; then
+  bash "$SRC/deploy/install-restart-helper.sh"
+fi

@@ -1,0 +1,2 @@
+# Ownswitch portal Settings → Restart
+ownswitch ALL=(root) NOPASSWD: /usr/local/sbin/ownswitch-restart

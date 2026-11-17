@@ -32,6 +32,7 @@ use Ownswitch\Controllers\PrefixController;
 use Ownswitch\Controllers\RatePlanController;
 use Ownswitch\Controllers\RecordingController;
 use Ownswitch\Controllers\ReportController;
+use Ownswitch\Controllers\RestartController;
 use Ownswitch\Controllers\RoutingController;
 use Ownswitch\Controllers\SettingsController;
 use Ownswitch\Controllers\SslController;
@@ -361,6 +362,10 @@ $router->group('', ['auth', 'tenant', 'features', 'csrf'], function (Router $r) 
     $r->post('/settings/firewall/import-ban', [$fw, 'importBan'], [$STAFF]);
     $r->post('/settings/firewall/import-unban', [$fw, 'importUnban'], [$STAFF]);
     $r->post('/settings/firewall/config', [$fw, 'saveConfig'], [$STAFF]);
+    $restart = new RestartController();
+    $r->get('/settings/restart', [$restart, 'index'], [$STAFF]);
+    $r->post('/settings/restart/opensips', [$restart, 'opensips'], [$STAFF]);
+    $r->post('/settings/restart/server', [$restart, 'server'], [$STAFF]);
     $ver = new VersionController();
     $r->get('/settings/version', [$ver, 'index'], [$STAFF]);
     $r->get('/settings/version/update', static fn () => Response::redirect(url('/settings/version')));

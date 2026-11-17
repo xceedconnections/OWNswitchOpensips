@@ -102,6 +102,7 @@ final class Menu
                 ['CallerID', '/callerid-groups', self::STAFF],
                 ['DNC', '/dnc', self::STAFF],
                 ['Firewall', '/settings/firewall', self::STAFF],
+                ['Restart', '/settings/restart', self::STAFF],
                 ['Update', '/settings/version', self::STAFF],
                 ['System Status', '/system/status', self::STAFF],
                 ['User Access', '/settings/user-access', self::STAFF],
