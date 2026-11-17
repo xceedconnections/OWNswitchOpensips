@@ -108,25 +108,72 @@
         sync();
     })();
 
-    // Close mobile offcanvas after nav click; keep accordion chevron state in sync
+    // Left menu: pin keeps it docked; unpin hides it (WordPress-style). Overlay until pinned again.
     var sidebar = document.getElementById('osSidebar');
-    if (sidebar && window.bootstrap) {
-        sidebar.querySelectorAll('a.os-nav-link').forEach(function (link) {
+    if (sidebar) {
+        var pinBtn = document.getElementById('osSidebarPin');
+        var openBtn = document.getElementById('osSidebarOpen');
+        var backdrop = document.getElementById('osSidebarBackdrop');
+        var pinKey = 'osSidebarPinned';
+        var mobileNav = function () {
+            return window.matchMedia('(max-width: 991.98px)').matches;
+        };
+        var pinned = function () {
+            return !document.documentElement.classList.contains('os-sidebar-hidden');
+        };
+        var paintPin = function (isPinned) {
+            if (!pinBtn) { return; }
+            pinBtn.setAttribute('aria-pressed', isPinned ? 'true' : 'false');
+            pinBtn.setAttribute('title', isPinned ? 'Unpin menu' : 'Pin menu');
+            pinBtn.setAttribute('aria-label', isPinned ? 'Unpin menu' : 'Pin menu');
+            var icon = pinBtn.querySelector('i');
+            if (icon) {
+                icon.className = isPinned ? 'bi bi-pin-angle-fill' : 'bi bi-pin-angle';
+            }
+        };
+        var setPinned = function (isPinned) {
+            document.documentElement.classList.toggle('os-sidebar-hidden', !isPinned);
+            document.documentElement.classList.remove('os-sidebar-open');
+            if (openBtn) { openBtn.setAttribute('aria-expanded', 'false'); }
+            if (backdrop) { backdrop.hidden = true; }
+            try { localStorage.setItem(pinKey, isPinned ? '1' : '0'); } catch (e) {}
+            paintPin(isPinned);
+        };
+        var setOpen = function (open) {
+            if (pinned() && !mobileNav()) { return; }
+            document.documentElement.classList.toggle('os-sidebar-open', open);
+            if (openBtn) { openBtn.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+            if (backdrop) { backdrop.hidden = !open; }
+        };
+        paintPin(pinned());
+        if (pinBtn) {
+            pinBtn.addEventListener('click', function () {
+                setPinned(!pinned());
+            });
+        }
+        if (openBtn) {
+            openBtn.addEventListener('click', function () {
+                setOpen(!document.documentElement.classList.contains('os-sidebar-open'));
+            });
+        }
+        if (backdrop) {
+            backdrop.addEventListener('click', function () { setOpen(false); });
+        }
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') { setOpen(false); }
+        });
+        sidebar.querySelectorAll('a').forEach(function (link) {
             link.addEventListener('click', function () {
-                var inst = bootstrap.Offcanvas.getInstance(sidebar);
-                if (inst && window.matchMedia('(max-width: 991.98px)').matches) {
-                    inst.hide();
-                }
+                if (!pinned() || mobileNav()) { setOpen(false); }
             });
         });
-        sidebar.querySelectorAll('.os-nav-group .collapse').forEach(function (el) {
-            el.addEventListener('show.bs.collapse', function () {
-                var g = el.closest('.os-nav-group');
-                if (g) { g.classList.add('is-open'); }
-            });
-            el.addEventListener('hide.bs.collapse', function () {
-                var g = el.closest('.os-nav-group');
-                if (g) { g.classList.remove('is-open'); }
+        sidebar.querySelectorAll('.os-side-group-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var group = btn.closest('.os-side-group');
+                if (!group) { return; }
+                var open = !group.classList.contains('is-open');
+                group.classList.toggle('is-open', open);
+                btn.setAttribute('aria-expanded', open ? 'true' : 'false');
             });
         });
     }

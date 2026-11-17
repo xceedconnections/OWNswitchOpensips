@@ -55,46 +55,80 @@ if ($user && in_array($user['role'] ?? '', ['customer_owner', 'customer_tech'], 
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" crossorigin="anonymous">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" crossorigin="anonymous">
     <link rel="stylesheet" href="<?= e(asset('css/app.css')) ?>">
+    <?php if ($user): ?>
+    <script>
+    try { if (localStorage.getItem('osSidebarPinned') === '0') document.documentElement.classList.add('os-sidebar-hidden'); } catch (e) {}
+    </script>
+    <?php endif; ?>
 </head>
-<body class="os-body<?= $user ? '' : ' os-auth-body' ?>">
-<?php if ($user): ?>
-<header class="os-header">
-    <div class="os-header-inner">
+<body class="os-body<?= $user ? ' os-app' : ' os-auth-body' ?>">
+<?php if ($user):
+    $sideIcons = [
+        'Clients' => 'bi-people',
+        'DIDs' => 'bi-telephone',
+        'Billing' => 'bi-credit-card',
+        'Rates' => 'bi-tags',
+        'Reports' => 'bi-bar-chart',
+        'Routes' => 'bi-signpost-split',
+        'Stats' => 'bi-graph-up',
+        'Settings' => 'bi-gear',
+    ];
+?>
+<aside class="os-sidebar" id="osSidebar">
+    <div class="os-sidebar-brand">
         <a class="os-logo" href="<?= e(url('/')) ?>">
             <?php if ($logoUrl): ?>
-                <img src="<?= e($logoUrl) ?>" alt="Ownswitch" class="os-logo-img">
+                <img src="<?= e($logoUrl) ?>" alt="<?= e($footerBrand) ?>" class="os-logo-img">
             <?php else: ?>
                 <span class="os-logo-mark">Ow</span>
                 <span class="os-logo-text">Ownswitch</span>
             <?php endif; ?>
         </a>
-
-        <button class="btn os-nav-burger d-lg-none" type="button" data-bs-toggle="collapse" data-bs-target="#osTopNav" aria-controls="osTopNav" aria-expanded="false" aria-label="Menu">
+        <button type="button" class="os-pin-btn" id="osSidebarPin" aria-pressed="true" title="Unpin menu" aria-label="Unpin menu">
+            <i class="bi bi-pin-angle-fill" aria-hidden="true"></i>
+        </button>
+    </div>
+    <nav class="os-side-nav" aria-label="Main">
+        <a class="os-side-link<?= $itemActive('/') ? ' is-active' : '' ?>" href="<?= e(url('/')) ?>">
+            <i class="bi bi-speedometer2" aria-hidden="true"></i>
+            <span>Dashboard</span>
+        </a>
+        <?php foreach ($menu as $section):
+            $active = $sectionActive($section);
+            $icon = $sideIcons[$section['label']] ?? 'bi-folder';
+            ?>
+            <div class="os-side-group<?= $active ? ' is-open' : '' ?>">
+                <button type="button" class="os-side-group-btn<?= $active ? ' is-active' : '' ?>" aria-expanded="<?= $active ? 'true' : 'false' ?>">
+                    <i class="bi <?= e($icon) ?>" aria-hidden="true"></i>
+                    <span><?= e($section['label']) ?></span>
+                    <i class="bi bi-chevron-down os-side-chevron" aria-hidden="true"></i>
+                </button>
+                <div class="os-side-sub">
+                    <?php foreach ($section['items'] as $item): ?>
+                        <a class="os-side-sublink<?= $itemActive($item['path']) ? ' is-active' : '' ?>" href="<?= e(url($item['path'])) ?>">
+                            <?= e($item['label']) ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    </nav>
+</aside>
+<div class="os-sidebar-backdrop" id="osSidebarBackdrop" hidden></div>
+<div class="os-shell">
+<header class="os-header">
+    <div class="os-header-inner">
+        <button class="btn os-nav-burger" type="button" id="osSidebarOpen" aria-controls="osSidebar" aria-expanded="false" aria-label="Show menu">
             <i class="bi bi-list fs-4"></i>
         </button>
-
-        <nav class="collapse os-top-nav" id="osTopNav">
-            <a class="os-nav-link<?= $itemActive('/') ? ' is-active' : '' ?>" href="<?= e(url('/')) ?>">Dashboard</a>
-            <?php foreach ($menu as $i => $section):
-                $active = $sectionActive($section);
-                $dd = 'osNavDd' . $i;
-                ?>
-                <div class="dropdown">
-                    <button class="os-nav-link dropdown-toggle<?= $active ? ' is-active' : '' ?>" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                        <?= e($section['label']) ?>
-                    </button>
-                    <ul class="dropdown-menu os-dd-menu shadow-sm border-0">
-                        <?php foreach ($section['items'] as $item): ?>
-                            <li>
-                                <a class="dropdown-item<?= $itemActive($item['path']) ? ' active' : '' ?>" href="<?= e(url($item['path'])) ?>">
-                                    <?= e($item['label']) ?>
-                                </a>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-            <?php endforeach; ?>
-        </nav>
+        <a class="os-logo os-top-logo" href="<?= e(url('/')) ?>">
+            <?php if ($logoUrl): ?>
+                <img src="<?= e($logoUrl) ?>" alt="<?= e($footerBrand) ?>" class="os-logo-img">
+            <?php else: ?>
+                <span class="os-logo-mark">Ow</span>
+                <span class="os-logo-text">Ownswitch</span>
+            <?php endif; ?>
+        </a>
 
         <div class="os-header-actions">
             <?php if ($user && in_array($user['role'] ?? '', ['customer_owner', 'customer_tech'], true) && !empty($user['customer_id'])): ?>
@@ -161,6 +195,7 @@ if ($user && in_array($user['role'] ?? '', ['customer_owner', 'customer_tech'], 
         <span class="os-footer-meta">ON-Switch - Powered By <a href="https://xceedconnections.com/onswitch-hosted-switch-cloud.php" target="_blank" rel="noopener noreferrer">Xceed Connections</a></span>
     </div>
 </footer>
+</div>
 <?php else: ?>
 <main class="os-auth-page">
     <div class="os-auth-wrap">
