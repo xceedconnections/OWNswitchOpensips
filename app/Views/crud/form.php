@@ -27,7 +27,7 @@ $sectionHints = [
     'CLI and dial format' => 'Caller ID rules, length checks, destination rewrite, and CLI block lists.',
     'StirShaken' => 'Outbound STIR/SHAKEN certificate and attestation (A / B / C) for Identity headers toward vendors.',
     'Routing & media' => 'Trunk group, DNC, codecs, concurrent call limits, and media path.',
-    'IPs' => 'Live status per allowed IP — green + ms only while that IP has an active SIP REGISTER.',
+    'IPs' => 'Live status per allowed IP — REGISTER when present, otherwise SIP OPTIONS RTT (IP AUTH / ViciDial).',
     'General' => 'Core trunk identity, signalling endpoint, and vendor auth.',
     'Dial & CLI' => 'Number rewriting and outbound Caller ID toward the vendor.',
     'Limits' => 'Capacity, CAP, DNC, and gateway probing.',
@@ -157,7 +157,7 @@ $panelClass = 'os-panel col-12' . ($enhancedForm ? ' os-entity-form' : '');
                             </div>
                         <?php endforeach; ?>
                     </div>
-                    <p class="os-ip-latency-note mb-0">Allowed IPs authorize INVITEs via ACL. Live (green) and ms appear only while OpenSIPS has an active REGISTER from that IP — not from OPTIONS or an open firewall. IP-only peers (no password) never REGISTER, so they stay offline here; use Dynamic (username/password) when you need Live/ms.</p>
+                    <p class="os-ip-latency-note mb-0">Allowed IPs authorize INVITEs via ACL. Live (green) + ms use an active REGISTER when present; otherwise Qualify=Yes probes that peer with SIP OPTIONS (IP AUTH / ViciDial). Turn Qualify off to skip probing.</p>
                 </div>
             <?php else: ?>
             <div class="row g-3<?= $useTabs ? ' mb-2' : '' ?><?= $enhancedForm ? ' os-form-fields' : '' ?>">

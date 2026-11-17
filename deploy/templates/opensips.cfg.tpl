@@ -15,15 +15,16 @@
 
 ####### Global parameters #########
 
-log_level=3
-xlog_level=3
-stderror_enabled=yes
+# NOTICE+ only — INFO spam under Vicidial concurrency saturates journald/CPU on small hosts
+log_level=2
+xlog_level=2
+stderror_enabled=no
 syslog_enabled=yes
 syslog_facility=LOG_LOCAL0
 syslog_name="opensips"
 
 udp_workers=@@OPENSIPS_UDP_WORKERS@@
-tcp_workers=4
+tcp_workers=@@OPENSIPS_TCP_WORKERS@@
 # Advertise socket IPs + every host/IP we know (primary FQDN, public IP, extra local IPs)
 auto_aliases=yes
 mpath="@@OPENSIPS_MPATH@@"
@@ -106,10 +107,11 @@ modparam("dialog", "db_url", "@@OPENSIPS_DB_URL@@")
 modparam("dialog", "db_mode", 2)
 # hard cap on call length (seconds) - safety net for billing
 modparam("dialog", "default_timeout", 7200)
-# Detect dead legs (ViciDial hangup without BYE reaching us) and clear zombie "Connected" dialogs
-modparam("dialog", "options_ping_interval", 10)
+# Detect dead legs (ViciDial hangup without BYE reaching us) and clear zombie "Connected" dialogs.
+# 10s/20s flooded 2vCPU hosts at ~60 concurrent (hundreds of keepalives/min). Same zombie cleanup, less often.
+modparam("dialog", "options_ping_interval", 60)
 # Re-INVITE ping: Asterisk often 200-OKs OPTIONS after hangup; missing re-INVITE drops the dialog
-modparam("dialog", "reinvite_ping_interval", 20)
+modparam("dialog", "reinvite_ping_interval", 90)
 # 0 = drop from MI immediately when terminated (no state-5 ghosts on Calls Online)
 modparam("dialog", "delete_delay", 0)
 # 1=DID_FALLBACK (default). 0=DID_ONLY needs did= in RR; Vicidial BYEs often miss it.

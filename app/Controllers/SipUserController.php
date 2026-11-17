@@ -429,8 +429,7 @@ final class SipUserController extends CrudController
 
     /**
      * Per-IP Live status for the edit/view IPs tab (IP-based peers only).
-     * Green + ms only when OpenSIPS has a live REGISTER whose contact/received matches that IP.
-     * ACL allow-lists and raw OPTIONS replies do not count as online.
+     * Prefer a live REGISTER match; otherwise OPTIONS RTT to the peer IP (ViciDial / IP AUTH).
      *
      * @return array{peerIpLatency: list<array{ip:string,port:int,online:bool,ms:?int,state:string}>}
      */
@@ -449,6 +448,7 @@ final class SipUserController extends CrudController
             $port = 5060;
         }
         $user = strtolower(trim((string) ($existing['username'] ?? '')));
+        $qualify = strtolower((string) ($existing['qualify'] ?? 'yes')) === 'yes';
         $prov = OpensipsProvisioner::fromConfig();
         $regs = $prov->enabled() ? $prov->registeredContacts() : [];
         $reg = $this->findRegistration($user, $regs);
@@ -480,11 +480,19 @@ final class SipUserController extends CrudController
                     $state = $st !== '' ? $st : 'UNREACHABLE';
                 }
             }
+            // IP peers (ViciDial) rarely REGISTER — OPTIONS to the peer IP is Live + ms.
+            if (!$online && $qualify) {
+                $ms = SipOptionsProbe::rttMs($ip, $port, 1.5, $user !== '' ? $user : null);
+                if ($ms !== null && $ms > 0) {
+                    $online = true;
+                    $state = 'IP AUTH';
+                }
+            }
             $rows[] = [
                 'ip' => $ip,
                 'port' => $port,
                 'online' => $online,
-                'ms' => $ms,
+                'ms' => ($ms !== null && $ms > 0) ? $ms : null,
                 'state' => $state,
             ];
         }
@@ -533,7 +541,7 @@ final class SipUserController extends CrudController
             }
 
             $isDynamic = $peerIps === [];
-            // Live = active REGISTER only. IP ACL / firewall OPTIONS replies do not count.
+            // Dynamic: Live = active REGISTER. IP peers: REGISTER if present, else OPTIONS to peer IP.
             if ($reg !== null) {
                 $state = strtoupper(trim((string) ($reg['state'] ?? 'REGED')));
                 if ($state === '') {
@@ -561,16 +569,10 @@ final class SipUserController extends CrudController
                         $ms = $fromFs;
                     }
                 }
-            } elseif (!$isDynamic) {
-                // Fixed-IP ACL peer with no REGISTER → offline (not green "IP AUTH").
-                $online = false;
-                $ms = null;
-                $state = 'offline';
             }
 
-            // Only when already REGED: optional OPTIONS RTT via OpenSIPS → contact (real UA ms).
-            // Never use a bare OPTIONS reply to mark an unregistered peer live.
             if ($online && $qualify && ($ms === null || $ms <= 0) && $user !== '' && is_array($reg)) {
+                // REGED: OPTIONS RTT via OpenSIPS → contact (real UA ms).
                 $probeHost = trim((string) App::config('app.integrations.opensips.public_ip', ''));
                 if ($probeHost === '') {
                     $probeHost = trim((string) App::config('app.integrations.opensips.sip_domain', ''));
@@ -598,6 +600,22 @@ final class SipUserController extends CrudController
                         }
                     }
                 }
+            } elseif (!$online && !$isDynamic && $qualify) {
+                // IP AUTH / ViciDial: probe the allowed peer IP directly (not OpenSIPS).
+                foreach ($peerIps as $pip) {
+                    $probe = SipOptionsProbe::rttMs($pip, $port, 1.5, $user !== '' ? $user : null);
+                    if ($probe !== null && $probe > 0) {
+                        $online = true;
+                        $ms = $probe;
+                        $state = 'IP AUTH';
+                        break;
+                    }
+                }
+                if (!$online) {
+                    $state = 'offline';
+                }
+            } elseif (!$online && !$isDynamic) {
+                $state = 'offline';
             }
 
             // Same shape as trunk Live column: green/red + REGED / ms.

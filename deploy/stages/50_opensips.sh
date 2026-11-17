@@ -201,7 +201,25 @@ _pw_enc="$(python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.envir
   P="${MYSQL_OPENSIPS_PASSWORD}" 2>/dev/null || printf '%s' "${MYSQL_OPENSIPS_PASSWORD}")"
 export OPENSIPS_DB_URL="mysql://opensips:${_pw_enc}@127.0.0.1/${DB_OPENSIPS}"
 export OPENSIPS_FIFO="${OPENSIPS_FIFO:-/run/opensips/opensips_fifo}"
-export OPENSIPS_UDP_WORKERS="${OPENSIPS_UDP_WORKERS:-8}"
+# Small VPS (2 vCPU / 4 GB): fewer workers than stock 8+4 — same routing, less package-RAM and context switch.
+_ncpu="$(nproc 2>/dev/null || echo 2)"
+if [[ -z "${OPENSIPS_UDP_WORKERS:-}" ]]; then
+  if (( _ncpu <= 2 )); then
+    OPENSIPS_UDP_WORKERS=4
+  elif (( _ncpu <= 4 )); then
+    OPENSIPS_UDP_WORKERS=6
+  else
+    OPENSIPS_UDP_WORKERS=8
+  fi
+fi
+if [[ -z "${OPENSIPS_TCP_WORKERS:-}" ]]; then
+  if (( _ncpu <= 2 )); then
+    OPENSIPS_TCP_WORKERS=2
+  else
+    OPENSIPS_TCP_WORKERS=4
+  fi
+fi
+export OPENSIPS_UDP_WORKERS OPENSIPS_TCP_WORKERS
 export CGR_BIJSON_ADDR="${CGR_BIJSON_ADDR:-127.0.0.1:2014}"
 export RTPENGINE_SOCK="${RTPENGINE_SOCK:-udp:127.0.0.1:${RTPENGINE_NG_PORT:-22222}}"
 export FAILOVER_SIP_STATUS="${FAILOVER_SIP_STATUS:-408|480|486|500|502|503|504}"
@@ -314,7 +332,9 @@ mysql_root "${DB_OPENSIPS}" -e \
     PRIMARY KEY (group_id, number_digits)
   ) ENGINE=InnoDB DEFAULT CHARSET=latin1" 2>/dev/null || true
 
-_dnc_php="$(command -v php || echo /usr/bin/php)"
+_php_bin="$(command -v php || echo /usr/bin/php)"
+_php_dial="${_php_bin} -d opcache.enable_cli=1 -d opcache.validate_timestamps=1 -d memory_limit=128M"
+_dnc_php="${_php_dial}"
 _dnc_script="/opt/ownswitch/current/bin/dial-dnc-check.php"
 [[ -f "${_dnc_script}" ]] || _dnc_script="/opt/ownswitch-src/bin/dial-dnc-check.php"
 
@@ -493,7 +513,7 @@ route[check_dnc] {
 	if ($(var(dnc_dst){s.len}) < 3) {
 		return;
 	}
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_dnc_php}"' '"${_dnc_script}"' $var(dncid) $var(dnc_dst)")) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_dnc_script}"' $var(dncid) $var(dnc_dst)")) {
 		xlog("L_WARN", "SIP DNC hit (php) group=$var(dncid) dst=$var(dnc_dst)\n");
 		acc_db_request("403 Do Not Call", "acc");
 		send_reply(403, "Do Not Call");
@@ -515,7 +535,7 @@ route[check_dnc] {
 	if ($(var(dnc_dst){s.len}) < 3) {
 		return;
 	}
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_dnc_php}"' '"${_dnc_script}"' $var(dncid) $var(dnc_dst)")) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_dnc_script}"' $var(dncid) $var(dnc_dst)")) {
 		xlog("L_WARN", "Trunk DNC hit (php) group=$var(dncid) dst=$var(dnc_dst)\n");
 		acc_db_request("403 Do Not Call", "acc");
 		send_reply(403, "Do Not Call");
@@ -537,7 +557,8 @@ route[check_dnc] {
 fi
 
 # Load SIP profile for IP-auth peers (no digest → load_credentials skipped)
-_rate_php="$(command -v php || echo /usr/bin/php)"
+# ${_php_dial} set above (CLI opcache) — same dial helpers, less PHP parse cost under concurrent INVITEs.
+_rate_php="${_php_dial}"
 if [[ -z "${OPENSIPS_SIP_PROFILE_ROUTE:-}" ]]; then
   _prof_script="/opt/ownswitch/current/bin/dial-sip-profile.php"
   [[ -f "${_prof_script}" ]] || _prof_script="/opt/ownswitch-src/bin/dial-sip-profile.php"
@@ -559,7 +580,7 @@ if [[ -z "${OPENSIPS_SIP_PROFILE_ROUTE:-}" ]]; then
 		return;
 	}
 	$var(prof_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_prof_script}"' $var(prof_user)", , $var(prof_out))) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_prof_script}"' $var(prof_user)", , $var(prof_out))) {
 		return;
 	}
 	if ($var(prof_out) == NULL || $(var(prof_out){s.len}) < 5) {
@@ -645,7 +666,7 @@ if [[ -z "${OPENSIPS_DST_REWRITE_ROUTE:-}" ]]; then
 		$var(rw_user) = $fU;
 	}
 	$var(rw_out) = NULL;
-	if (exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_rw_script}"' $var(rw_user) $rU", , $var(rw_out))) {
+	if (exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_rw_script}"' $var(rw_user) $rU", , $var(rw_out))) {
 		$var(rw_dst) = $(var(rw_out){re.subst,/[^0-9]//g});
 		if ($var(rw_dst) != NULL && $(var(rw_dst){s.len}) >= 3 && $var(rw_dst) != $rU) {
 			xlog("L_INFO", "dst rewrite user=$var(rw_user) from=$rU to=$var(rw_dst)\n");
@@ -694,7 +715,7 @@ if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
 	$acc_extra(ip) = $si;
 	$var(rate_out) = NULL;
 	$avp(os_rplan) = 0;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_rate_php}"' '"${_rate_script}"' $var(rate_user) $rU", , $var(rate_out))) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_rate_script}"' $var(rate_user) $rU", , $var(rate_out))) {
 		xlog("L_WARN", "Unrated Destination user=$var(rate_user) dst=$rU\n");
 		acc_db_request("403 Unrated Destination", "acc");
 		send_reply(403, "Unrated Destination");
@@ -731,7 +752,7 @@ if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
 fi
 
 # Rate CAP via portal PHP (exec → bin/dial-cap-check.php)
-_cap_php="$(command -v php || echo /usr/bin/php)"
+_cap_php="${_php_dial:-$(command -v php || echo /usr/bin/php)}"
 if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
   _cap_script="/opt/ownswitch/current/bin/dial-cap-check.php"
   [[ -f "${_cap_script}" ]] || _cap_script="/opt/ownswitch-src/bin/dial-cap-check.php"
@@ -760,7 +781,7 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 		$var(cap_dst) = $rU;
 	}
 	$var(cap_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cap_script}"' $var(cap_user) $var(cap_dst) $var(tid)", , $var(cap_out))) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_cap_script}"' $var(cap_user) $var(cap_dst) $var(tid)", , $var(cap_out))) {
 		$var(cap_out) = "DENY_TRUNK exec_failed";
 	}
 	if ($var(cap_out) =~ "DENY_USER") {
@@ -822,7 +843,7 @@ if [[ -z "${OPENSIPS_SIP_LIMIT_ROUTE:-}" ]]; then
 	if ($var(lim_user) == NULL || $(var(lim_user){s.len}) == 0) {
 		return;
 	}
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_sip_lim_script}"' $var(lim_user)")) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_sip_lim_script}"' $var(lim_user)")) {
 		xlog("L_WARN", "SIP Congestion user=$var(lim_user) from=$si (channels/CPS)\n");
 		acc_db_request("503 Congestion", "acc");
 		send_reply(503, "Congestion");
@@ -860,7 +881,7 @@ if [[ -z "${OPENSIPS_CALLERID_ROUTE:-}" ]]; then
 		$var(cid_dst) = $rU;
 	}
 	$var(cid_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cid_script}"' $var(cid_user) $var(cid_dst)", , $var(cid_out))) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_cid_script}"' $var(cid_user) $var(cid_dst)", , $var(cid_out))) {
 		return;
 	}
 	$var(cid_cli) = $(var(cid_out){re.subst,/[^0-9+]//g});
@@ -913,7 +934,7 @@ if [[ -z "${OPENSIPS_TRUNK_CALLERID_ROUTE:-}" ]]; then
 		$var(tcid_dst) = $rU;
 	}
 	$var(tcid_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_tcid_script}"' group $var(tcidg) $var(tcid_dst)", , $var(tcid_out))) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_tcid_script}"' group $var(tcidg) $var(tcid_dst)", , $var(tcid_out))) {
 		xlog("L_WARN", "trunk CallerID group exec failed cidg=$var(tcidg)\n");
 		return;
 	}
@@ -968,7 +989,7 @@ if [[ -z "${OPENSIPS_TRUNK_LIMIT_ROUTE:-}" ]]; then
 		return;
 	}
 	$dlg_val(tid) = $var(tid);
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_trk_lim_script}"' $var(tid)")) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_trk_lim_script}"' $var(tid)")) {
 		xlog("L_WARN", "Trunk capacity exceeded tid=$var(tid) — trying next route\n");
 		if ($var(trk_lim_tries) == NULL) {
 			$var(trk_lim_tries) = 0;
@@ -1024,7 +1045,7 @@ if [[ -z "${OPENSIPS_CLI_RESTRICT_ROUTE:-}" ]]; then
 	if ($var(cli_digits) == NULL || $(var(cli_digits){s.len}) < 3) {
 		return;
 	}
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env '"${_cap_php}"' '"${_cli_script}"' $var(cli_user) $var(cli_digits)")) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_cli_script}"' $var(cli_user) $var(cli_digits)")) {
 		xlog("L_WARN", "CLI restricted user=$var(cli_user) cli=$var(cli_digits)\n");
 		acc_db_request("403 CLI restricted", "acc");
 		send_reply(403, "CLI restricted");
@@ -1133,6 +1154,7 @@ Restart=on-failure
 RestartSec=5
 EOF
 # Stock P_MEMORY=4 causes drops/timeouts under Vicidial burst (looks like congestion).
+# Keep 64 MB pkg per worker; fewer workers on small hosts (above) cuts total RAM vs old 8×64+4×64.
 if [[ -f /etc/default/opensips ]]; then
   sed -i 's/^P_MEMORY=.*/P_MEMORY=64/' /etc/default/opensips || true
   sed -i 's/^S_MEMORY=.*/S_MEMORY=256/' /etc/default/opensips || true
@@ -1142,6 +1164,7 @@ cat >/etc/systemd/system/opensips.service.d/ownswitch-memory.conf <<'EOF'
 Environment=P_MEMORY=64
 Environment=S_MEMORY=256
 EOF
+log_info "OpenSIPS workers udp=${OPENSIPS_UDP_WORKERS} tcp=${OPENSIPS_TCP_WORKERS} (cpus=${_ncpu})"
 systemctl daemon-reload || true
 systemctl enable opensips >/dev/null 2>&1 || true
 # Free port 5060 if something else still holds it (e.g. leftover FreeSWITCH)
