@@ -72,9 +72,24 @@ final class DialInviteService
             return ['ok' => false, 'deny' => 'payment_required', 'fields' => $fields];
         }
 
+        // Feature flags first so DENY responses still tell OpenSIPS what to skip.
         $map = (string) ($acct['dst_prefix_map'] ?? '');
         $hasMap = DstPrefixMap::parse($map) !== [];
         $fields['has_dstmap'] = $hasMap ? '1' : '0';
+        $gid = (int) ($acct['callerid_group_id'] ?? 0);
+        $fields['has_usercidg'] = $gid > 0 ? '1' : '0';
+        $cap = $acct['rate_cap'] ?? null;
+        $fields['has_usercap'] = ($cap !== null && $cap !== '' && is_numeric($cap) && (float) $cap > 0) ? '1' : '0';
+        $fields['has_dnc'] = ((int) ($acct['dnc_group_id'] ?? 0) > 0) ? '1' : '0';
+        $fields['has_cli'] = $this->hasCliRestriction((int) ($acct['id'] ?? 0)) ? '1' : '0';
+        $maxCh = (int) ($acct['max_channels'] ?? -1);
+        $maxCps = (int) ($acct['max_cps'] ?? -1);
+        if ($maxCps === 0) {
+            $maxCps = 1;
+        }
+        $needsSipLim = ($maxCh >= 0) || ($maxCps >= 0);
+        $fields['has_siplim'] = $needsSipLim ? '1' : '0';
+
         if ($hasMap) {
             $dst = DstPrefixMap::apply($map, $dst);
         }
@@ -108,13 +123,6 @@ final class DialInviteService
         $fields['dial_prefix'] = $dialPfx;
         $fields['tariff'] = (string) ($rate['prefix'] ?? '');
 
-        $maxCh = (int) ($acct['max_channels'] ?? -1);
-        $maxCps = (int) ($acct['max_cps'] ?? -1);
-        if ($maxCps === 0) {
-            $maxCps = 1;
-        }
-        $needsSipLim = ($maxCh >= 0) || ($maxCps >= 0);
-        $fields['has_siplim'] = $needsSipLim ? '1' : '0';
         if ($needsSipLim) {
             $lim = $this->limits->authorizeSipUser($user);
             if (!$lim['allow']) {
@@ -122,19 +130,12 @@ final class DialInviteService
             }
         }
 
-        $gid = (int) ($acct['callerid_group_id'] ?? 0);
-        $fields['has_usercidg'] = $gid > 0 ? '1' : '0';
         if ($gid > 0) {
             $pick = $this->callerIds->pickFromGroup($gid, $routeDst !== '' ? $routeDst : $dst);
             if ($pick !== null && $pick['cli'] !== '') {
                 $fields['sip_cid'] = $pick['cli'];
             }
         }
-
-        $cap = $acct['rate_cap'] ?? null;
-        $fields['has_usercap'] = ($cap !== null && $cap !== '' && is_numeric($cap) && (float) $cap > 0) ? '1' : '0';
-        $fields['has_dnc'] = ((int) ($acct['dnc_group_id'] ?? 0) > 0) ? '1' : '0';
-        $fields['has_cli'] = $this->hasCliRestriction((int) ($acct['id'] ?? 0)) ? '1' : '0';
 
         return ['ok' => true, 'deny' => null, 'fields' => $fields];
     }
