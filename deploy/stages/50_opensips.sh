@@ -340,7 +340,10 @@ _dnc_script="/opt/ownswitch/current/bin/dial-dnc-check.php"
 [[ -f "${_dnc_script}" ]] || _dnc_script="/opt/ownswitch-src/bin/dial-dnc-check.php"
 
 # Shared DNC body helpers (digits from rewritten $rU / os_dst)
-_dnc_sip_body_redis='	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
+_dnc_sip_body_redis='	if ($dlg_val(has_dnc) == "0") {
+		return;
+	}
+	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
 		return;
 	}
 	$var(dncid) = $avp(os_dncid);
@@ -433,6 +436,9 @@ ${_dnc_trunk_body_redis}
     export OPENSIPS_DNC_MODULES="loadmodule \"sqlops.so\"
 modparam(\"sqlops\", \"db_url\", \"${OPENSIPS_DB_URL}\")"
     export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
+	if ($dlg_val(has_dnc) == "0") {
+		return;
+	}
 	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
 		return;
 	}
@@ -506,6 +512,9 @@ route[check_dnc] {
   elif (( HAVE_EXEC )) && [[ -f "${_dnc_script}" ]]; then
     export OPENSIPS_DNC_MODULES='# DNC via PHP exec (no redis/sqlops)'
     export OPENSIPS_DNC_ROUTE='route[check_sip_dnc] {
+	if ($dlg_val(has_dnc) == "0") {
+		return;
+	}
 	if ($avp(os_dncid) == NULL || $(avp(os_dncid){s.int}) <= 0) {
 		return;
 	}
@@ -581,7 +590,7 @@ if [[ -z "${OPENSIPS_SIP_PROFILE_ROUTE:-}" ]]; then
 		return;
 	}
 	$var(prof_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_prof_script}"' $var(prof_user)", , $var(prof_out))) {
+	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env @@PHP_DIAL@@ '"${_prof_script}"' $var(prof_user)", , $var(prof_out))) {
 		return;
 	}
 	if ($var(prof_out) == NULL || $(var(prof_out){s.len}) < 5) {
@@ -643,6 +652,7 @@ if [[ -z "${OPENSIPS_SIP_PROFILE_ROUTE:-}" ]]; then
 	}
 	xlog("L_INFO", "SIP profile loaded user=$var(prof_user) dncid=$avp(os_dncid) cid_mode=$avp(os_cid_mode)\n");
 }'
+    OPENSIPS_SIP_PROFILE_ROUTE="${OPENSIPS_SIP_PROFILE_ROUTE//@@PHP_DIAL@@/${_php_dial}}"
     chmod 644 "${_prof_script}" 2>/dev/null || true
     log_info "SIP profile: exec → ${_prof_script}"
   else
@@ -653,423 +663,16 @@ if [[ -z "${OPENSIPS_SIP_PROFILE_ROUTE:-}" ]]; then
   fi
 fi
 
-# SIP-user destination prefix rewrite (exec → bin/dial-dst-rewrite.php)
-if [[ -z "${OPENSIPS_DST_REWRITE_ROUTE:-}" ]]; then
-  _rw_script="/opt/ownswitch/current/bin/dial-dst-rewrite.php"
-  [[ -f "${_rw_script}" ]] || _rw_script="/opt/ownswitch-src/bin/dial-dst-rewrite.php"
-  if (( HAVE_EXEC )) && [[ -f "${_rw_script}" ]]; then
-    export OPENSIPS_DST_REWRITE_ROUTE='route[apply_sip_dst_rewrite] {
-	$var(rw_user) = $avp(os_auth_user);
-	if ($var(rw_user) == NULL || $(var(rw_user){s.len}) == 0) {
-		$var(rw_user) = $au;
-	}
-	if ($var(rw_user) == NULL || $(var(rw_user){s.len}) == 0) {
-		$var(rw_user) = $fU;
-	}
-	$var(rw_out) = NULL;
-	if (exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_rw_script}"' $var(rw_user) $rU", , $var(rw_out))) {
-		$var(rw_dst) = $(var(rw_out){re.subst,/[^0-9]//g});
-		if ($var(rw_dst) != NULL && $(var(rw_dst){s.len}) >= 3 && $var(rw_dst) != $rU) {
-			xlog("L_INFO", "dst rewrite user=$var(rw_user) from=$rU to=$var(rw_dst)\n");
-			$rU = $var(rw_dst);
-		} else if ($var(rw_dst) != NULL && $(var(rw_dst){s.len}) >= 3) {
-			$rU = $var(rw_dst);
-		}
-	}
-}'
-    usermod -aG ownswitch opensips 2>/dev/null || true
-    chmod 755 "$(dirname "${_rw_script}")" 2>/dev/null || true
-    chmod 644 "${_rw_script}" 2>/dev/null || true
-    log_info "DST rewrite: exec → ${_rw_script}"
-  else
-    export OPENSIPS_DST_REWRITE_ROUTE='route[apply_sip_dst_rewrite] {
-	return;
-}'
-    log_warn "DST rewrite: exec/dial-dst-rewrite missing — stub only"
-  fi
+# Unified dial helpers (skip-if-unused + single PHP forks)
+_dial_helpers="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/opensips_dial_helpers.sh"
+if [[ ! -f "${_dial_helpers}" ]]; then
+  _dial_helpers="/opt/ownswitch/current/deploy/lib/opensips_dial_helpers.sh"
 fi
-
-# Customer tariff / plan-prefix gate (exec → bin/dial-rate-check.php) — reject unrated dials
-if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
-  _rate_script="/opt/ownswitch/current/bin/dial-rate-check.php"
-  [[ -f "${_rate_script}" ]] || _rate_script="/opt/ownswitch-src/bin/dial-rate-check.php"
-  if (( HAVE_EXEC )) && [[ -f "${_rate_script}" ]]; then
-    export OPENSIPS_CUSTOMER_RATE_ROUTE='route[check_customer_rate] {
-	$var(rate_user) = $avp(os_auth_user);
-	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
-		$var(rate_user) = $au;
-	}
-	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
-		$var(rate_user) = $dlg_val(os_src);
-	}
-	if ($var(rate_user) == NULL || $(var(rate_user){s.len}) == 0) {
-		$var(rate_user) = $fU;
-	}
-	# Ensure ACC / CDR sees SIP user + (possibly rewritten) destination even on reject
-	$acc_extra(src) = $dlg_val(os_src);
-	$acc_extra(dst) = $rU;
-	if ($dlg_val(os_cli) != NULL && $(dlg_val(os_cli){s.len}) > 0) {
-		$acc_extra(cli) = $dlg_val(os_cli);
-	} else {
-		$acc_extra(cli) = $fU;
-	}
-	$acc_extra(ip) = $si;
-	$var(rate_out) = NULL;
-	$avp(os_rplan) = 0;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_rate_script}"' $var(rate_user) $rU", , $var(rate_out))) {
-		xlog("L_WARN", "Unrated Destination user=$var(rate_user) dst=$rU\n");
-		acc_db_request("403 Unrated Destination", "acc");
-		send_reply(403, "Unrated Destination");
-		exit;
-	}
-	# Parse trunk-group id + optional plan-prefix-stripped route digits.
-	# Use /s so trailing newline from PHP fwrite is consumed — otherwise rp becomes "3\\n"
-	# and =~ "^[0-9]+$" fails → tg stays 0 → false "no trunk group" while dial-rate-check is OK.
-	if ($var(rate_out) != NULL && $(var(rate_out){s.len}) > 0) {
-		$var(rp) = $(var(rate_out){re.subst,/^.*rplan=([0-9]+).*$/\1/s});
-		if ($var(rp) != NULL && $(var(rp){s.len}) > 0 && $var(rp) =~ "^[0-9]+$") {
-			$avp(os_rplan) = $(var(rp){s.int});
-		}
-		$var(rd) = $(var(rate_out){re.subst,/^.*route_dst=([0-9]+).*$/\1/s});
-		$var(pp) = $(var(rate_out){re.subst,/^.*dial_prefix=([0-9]+).*$/\1/s});
-		if ($var(pp) != NULL && $(var(pp){s.len}) > 0 && $var(pp) =~ "^[0-9]+$") {
-			$dlg_val(os_pp) = $var(pp);
-			$acc_extra(pp) = $var(pp);
-		}
-		if ($var(rd) != NULL && $(var(rd){s.len}) >= 3 && $var(rd) =~ "^[0-9]+$" && $var(rd) != $rU) {
-			xlog("L_INFO", "plan-prefix strip user=$var(rate_user) from=$rU to=$var(rd) pp=$dlg_val(os_pp) tg=$avp(os_rplan)\n");
-			$rU = $var(rd);
-			$dlg_val(os_dst) = $var(rd);
-			# Keep ACC destination as routed tariff digits; PP is stored separately in acc.pp
-			$acc_extra(dst) = $var(rd);
-		}
-	}
-	xlog("L_INFO", "rated OK user=$var(rate_user) dst=$rU pp=$dlg_val(os_pp) tg=$avp(os_rplan)\n");
-}'
-    usermod -aG ownswitch opensips 2>/dev/null || true
-    chmod 755 "$(dirname "${_rate_script}")" 2>/dev/null || true
-    chmod 644 "${_rate_script}" 2>/dev/null || true
-    log_info "Customer rate gate: exec → ${_rate_script}"
-  else
-    export OPENSIPS_CUSTOMER_RATE_ROUTE='route[check_customer_rate] {
-	return;
-}'
-    log_warn "Customer rate gate: exec/dial-rate-check missing — stub only"
-  fi
+if [[ ! -f "${_dial_helpers}" ]]; then
+  _dial_helpers="/opt/ownswitch-src/deploy/lib/opensips_dial_helpers.sh"
 fi
-
-# Rate CAP via portal PHP (exec → bin/dial-cap-check.php)
-_cap_php="${_php_dial:-$(command -v php || echo /usr/bin/php)}"
-if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
-  _cap_script="/opt/ownswitch/current/bin/dial-cap-check.php"
-  [[ -f "${_cap_script}" ]] || _cap_script="/opt/ownswitch-src/bin/dial-cap-check.php"
-  if (( HAVE_EXEC )) && [[ -f "${_cap_script}" ]]; then
-    export OPENSIPS_RATE_CAP_ROUTE='route[check_rate_cap] {
-	if ($avp(dr_gw_attrs) == NULL) {
-		return;
-	}
-	$var(tid) = $(avp(dr_gw_attrs){param.value,tid});
-	if ($var(tid) == NULL || $(var(tid){s.len}) == 0) {
-		return;
-	}
-	$var(cap_user) = $avp(os_auth_user);
-	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
-		$var(cap_user) = $dlg_val(os_src);
-	}
-	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
-		$var(cap_user) = $au;
-	}
-	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
-		$var(cap_user) = $fU;
-	}
-	# Cap against plan-prefix + routed digits (same tariff row as dial-time rating)
-	$var(cap_dst) = $dlg_val(os_dst);
-	if ($var(cap_dst) == NULL || $(var(cap_dst){s.len}) < 3) {
-		$var(cap_dst) = $rU;
-	}
-	if ($dlg_val(os_pp) != NULL && $(dlg_val(os_pp){s.len}) > 0) {
-		$var(cap_dst) = $dlg_val(os_pp) + $var(cap_dst);
-	}
-	$var(cap_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_cap_script}"' $var(cap_user) $var(cap_dst) $var(tid)", , $var(cap_out))) {
-		$var(cap_out) = "DENY_TRUNK exec_failed";
-	}
-	if ($var(cap_out) =~ "DENY_USER") {
-		xlog("L_WARN", "User Rate Cap Exceeded user=$var(cap_user) dst=$var(cap_dst)\n");
-		acc_db_request("403 Rate Cap Exceeded", "acc");
-		send_reply(403, "Rate Cap Exceeded");
-		exit;
-	}
-	if ($var(cap_out) =~ "DENY_TRUNK") {
-		xlog("L_WARN", "Trunk Rate Cap Exceeded user=$var(cap_user) dst=$var(cap_dst) trunk=$var(tid) — next gw\n");
-		if ($var(cap_tries) == NULL) {
-			$var(cap_tries) = 0;
-		}
-		$var(cap_tries) = $(var(cap_tries){s.int}) + 1;
-		if ($(var(cap_tries){s.int}) < 8 && use_next_gw()) {
-			route(check_dnc);
-			route(apply_ruri_strip);
-			route(restore_user_cli);
-			route(apply_sip_cid);
-			route(apply_callerid_group);
-			route(check_cid_len);
-			route(apply_trunk_attrs);
-			route(apply_trunk_callerid);
-			route(check_trunk_cid_len);
-			route(check_rate_cap);
-			return;
-		}
-		acc_db_request("403 Rate Cap Exceeded", "acc");
-		send_reply(403, "Rate Cap Exceeded");
-		exit;
-	}
-}'
-    # opensips runs as user opensips — release tree is root:ownswitch (g=rX)
-    usermod -aG ownswitch opensips 2>/dev/null || true
-    chmod 755 "$(dirname "${_cap_script}")" 2>/dev/null || true
-    chmod 644 "${_cap_script}" 2>/dev/null || true
-    log_info "Rate CAP: exec → ${_cap_script}"
-  else
-    export OPENSIPS_RATE_CAP_ROUTE='route[check_rate_cap] {
-	return;
-}'
-    log_warn "Rate CAP: exec/dial-cap-check missing — stub only"
-  fi
-fi
-
-# SIP-user Channels + CPS (exec → bin/dial-sip-limit-check.php)
-if [[ -z "${OPENSIPS_SIP_LIMIT_ROUTE:-}" ]]; then
-  _sip_lim_script="/opt/ownswitch/current/bin/dial-sip-limit-check.php"
-  [[ -f "${_sip_lim_script}" ]] || _sip_lim_script="/opt/ownswitch-src/bin/dial-sip-limit-check.php"
-  if (( HAVE_EXEC )) && [[ -f "${_sip_lim_script}" ]]; then
-    export OPENSIPS_SIP_LIMIT_ROUTE='route[check_sip_limits] {
-	$var(lim_user) = $avp(os_auth_user);
-	if ($var(lim_user) == NULL || $(var(lim_user){s.len}) == 0) {
-		$var(lim_user) = $dlg_val(os_src);
-	}
-	if ($var(lim_user) == NULL || $(var(lim_user){s.len}) == 0) {
-		$var(lim_user) = $au;
-	}
-	if ($var(lim_user) == NULL || $(var(lim_user){s.len}) == 0) {
-		return;
-	}
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_sip_lim_script}"' $var(lim_user)")) {
-		xlog("L_WARN", "SIP Congestion user=$var(lim_user) from=$si (channels/CPS)\n");
-		acc_db_request("503 Congestion", "acc");
-		send_reply(503, "Congestion");
-		exit;
-	}
-}'
-    chmod 644 "${_sip_lim_script}" 2>/dev/null || true
-    log_info "SIP limits: exec → ${_sip_lim_script}"
-  else
-    export OPENSIPS_SIP_LIMIT_ROUTE='route[check_sip_limits] {
-	return;
-}'
-    log_warn "SIP limits: exec/dial-sip-limit-check missing — stub only"
-  fi
-fi
-
-# CallerID group picker (exec → bin/dial-callerid-pick.php)
-if [[ -z "${OPENSIPS_CALLERID_ROUTE:-}" ]]; then
-  _cid_script="/opt/ownswitch/current/bin/dial-callerid-pick.php"
-  [[ -f "${_cid_script}" ]] || _cid_script="/opt/ownswitch-src/bin/dial-callerid-pick.php"
-  if (( HAVE_EXEC )) && [[ -f "${_cid_script}" ]]; then
-    export OPENSIPS_CALLERID_ROUTE='route[apply_callerid_group] {
-	$var(cid_user) = $avp(os_auth_user);
-	if ($var(cid_user) == NULL || $(var(cid_user){s.len}) == 0) {
-		$var(cid_user) = $dlg_val(os_src);
-	}
-	if ($var(cid_user) == NULL || $(var(cid_user){s.len}) == 0) {
-		$var(cid_user) = $au;
-	}
-	if ($var(cid_user) == NULL || $(var(cid_user){s.len}) == 0) {
-		return;
-	}
-	$var(cid_dst) = $dlg_val(os_dst);
-	if ($var(cid_dst) == NULL || $(var(cid_dst){s.len}) < 3) {
-		$var(cid_dst) = $rU;
-	}
-	$var(cid_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_cid_script}"' $var(cid_user) $var(cid_dst)", , $var(cid_out))) {
-		return;
-	}
-	$var(cid_cli) = $(var(cid_out){re.subst,/[^0-9+]//g});
-	if ($var(cid_cli) == NULL || $(var(cid_cli){s.len}) < 3 || $(var(cid_cli){s.len}) > 30) {
-		return;
-	}
-	if (!($var(cid_cli) =~ "^[+0-9]{3,30}$")) {
-		return;
-	}
-	$var(cid_dom) = $fd;
-	if ($var(cid_dom) == NULL || $(var(cid_dom){s.len}) == 0) {
-		$var(cid_dom) = $td;
-	}
-	$dlg_val(os_cli) = $var(cid_cli);
-	$acc_extra(cli) = $var(cid_cli);
-	remove_hf("From");
-	append_hf("From: <sip:$var(cid_cli)@$var(cid_dom)>;tag=$ft\r\n");
-	remove_hf("P-Asserted-Identity");
-	append_hf("P-Asserted-Identity: <sip:$var(cid_cli)@$var(cid_dom)>\r\n");
-	remove_hf("Remote-Party-ID");
-	append_hf("Remote-Party-ID: <sip:$var(cid_cli)@$var(cid_dom)>;party=calling;privacy=off;screen=yes\r\n");
-	xlog("L_INFO", "CallerID group CLI=$var(cid_cli) user=$var(cid_user) dst=$var(cid_dst)\n");
-}'
-    chmod 644 "${_cid_script}" 2>/dev/null || true
-    log_info "CallerID group: exec → ${_cid_script}"
-  else
-    export OPENSIPS_CALLERID_ROUTE='route[apply_callerid_group] {
-	return;
-}'
-    log_warn "CallerID group: exec/dial-callerid-pick missing — stub only"
-  fi
-fi
-
-# Trunk CallerID group (attrs cidg=) — same script, group id instead of SIP user.
-# Runs after apply_trunk_attrs so it replaces From user, display name, force portal, and the SIP-user group.
-if [[ -z "${OPENSIPS_TRUNK_CALLERID_ROUTE:-}" ]]; then
-  _tcid_script="/opt/ownswitch/current/bin/dial-callerid-pick.php"
-  [[ -f "${_tcid_script}" ]] || _tcid_script="/opt/ownswitch-src/bin/dial-callerid-pick.php"
-  if (( HAVE_EXEC )) && [[ -f "${_tcid_script}" ]]; then
-    export OPENSIPS_TRUNK_CALLERID_ROUTE='route[apply_trunk_callerid] {
-	if ($avp(dr_gw_attrs) == NULL) {
-		return;
-	}
-	$var(tcidg) = $(avp(dr_gw_attrs){param.value,cidg});
-	if ($var(tcidg) == NULL || $(var(tcidg){s.int}) <= 0) {
-		return;
-	}
-	$var(tcid_dst) = $dlg_val(os_dst);
-	if ($var(tcid_dst) == NULL || $(var(tcid_dst){s.len}) < 3) {
-		$var(tcid_dst) = $rU;
-	}
-	$var(tcid_out) = NULL;
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_tcid_script}"' group $var(tcidg) $var(tcid_dst)", , $var(tcid_out))) {
-		xlog("L_WARN", "trunk CallerID group exec failed cidg=$var(tcidg)\n");
-		return;
-	}
-	$var(tcid_cli) = $(var(tcid_out){re.subst,/[^0-9+]//g});
-	if ($var(tcid_cli) == NULL || $(var(tcid_cli){s.len}) < 3 || $(var(tcid_cli){s.len}) > 30) {
-		xlog("L_WARN", "trunk CallerID group empty cidg=$var(tcidg) dst=$var(tcid_dst)\n");
-		return;
-	}
-	if (!($var(tcid_cli) =~ "^[+0-9]{3,30}$")) {
-		return;
-	}
-	$var(tcid_dom) = $fd;
-	if ($var(tcid_dom) == NULL || $(var(tcid_dom){s.len}) == 0) {
-		$var(tcid_dom) = $td;
-	}
-	$var(tfd) = $(avp(dr_gw_attrs){param.value,fd});
-	if ($var(tfd) != NULL && $(var(tfd){s.len}) > 0) {
-		$var(tcid_dom) = $(var(tfd){s.unescape.param});
-	}
-	$dlg_val(os_cli) = $var(tcid_cli);
-	$acc_extra(cli) = $var(tcid_cli);
-	$dlg_val(os_cli_forced) = "1";
-	remove_hf("From");
-	append_hf("From: <sip:$var(tcid_cli)@$var(tcid_dom)>;tag=$ft\r\n");
-	remove_hf("P-Asserted-Identity");
-	append_hf("P-Asserted-Identity: <sip:$var(tcid_cli)@$var(tcid_dom)>\r\n");
-	remove_hf("Remote-Party-ID");
-	append_hf("Remote-Party-ID: <sip:$var(tcid_cli)@$var(tcid_dom)>;party=calling;privacy=off;screen=yes\r\n");
-	xlog("L_INFO", "trunk CallerID group FORCE cli=$var(tcid_cli) cidg=$var(tcidg) dst=$var(tcid_dst)\n");
-}'
-    chmod 644 "${_tcid_script}" 2>/dev/null || true
-    log_info "Trunk CallerID group: exec → ${_tcid_script}"
-  else
-    export OPENSIPS_TRUNK_CALLERID_ROUTE='route[apply_trunk_callerid] {
-	return;
-}'
-    log_warn "Trunk CallerID group: exec/dial-callerid-pick missing — stub only"
-  fi
-fi
-
-# Trunk Channels + CPS with next-gw failover (exec → bin/dial-trunk-limit-check.php)
-if [[ -z "${OPENSIPS_TRUNK_LIMIT_ROUTE:-}" ]]; then
-  _trk_lim_script="/opt/ownswitch/current/bin/dial-trunk-limit-check.php"
-  [[ -f "${_trk_lim_script}" ]] || _trk_lim_script="/opt/ownswitch-src/bin/dial-trunk-limit-check.php"
-  if (( HAVE_EXEC )) && [[ -f "${_trk_lim_script}" ]]; then
-    export OPENSIPS_TRUNK_LIMIT_ROUTE='route[check_trunk_limits] {
-	if ($avp(dr_gw_attrs) == NULL) {
-		return;
-	}
-	$var(tid) = $(avp(dr_gw_attrs){param.value,tid});
-	if ($var(tid) == NULL || $(var(tid){s.len}) == 0) {
-		return;
-	}
-	$dlg_val(tid) = $var(tid);
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_trk_lim_script}"' $var(tid)")) {
-		xlog("L_WARN", "Trunk capacity exceeded tid=$var(tid) — trying next route\n");
-		if ($var(trk_lim_tries) == NULL) {
-			$var(trk_lim_tries) = 0;
-		}
-		$var(trk_lim_tries) = $(var(trk_lim_tries){s.int}) + 1;
-		if ($(var(trk_lim_tries){s.int}) < 8 && use_next_gw()) {
-			route(check_dnc);
-			route(apply_ruri_strip);
-			route(restore_user_cli);
-			route(apply_sip_cid);
-			route(apply_callerid_group);
-			route(check_cid_len);
-			route(apply_trunk_attrs);
-			route(apply_trunk_callerid);
-			route(check_trunk_cid_len);
-			route(check_rate_cap);
-			route(check_trunk_limits);
-			return;
-		}
-		acc_db_request("503 Congestion", "acc");
-		send_reply(503, "Congestion");
-		exit;
-	}
-}'
-    chmod 644 "${_trk_lim_script}" 2>/dev/null || true
-    log_info "Trunk limits: exec → ${_trk_lim_script}"
-  else
-    export OPENSIPS_TRUNK_LIMIT_ROUTE='route[check_trunk_limits] {
-	return;
-}'
-    log_warn "Trunk limits: exec/dial-trunk-limit-check missing — stub only"
-  fi
-fi
-
-# CLI Restriction lists (block presented CallerID)
-if [[ -z "${OPENSIPS_CLI_RESTRICT_ROUTE:-}" ]]; then
-  _cli_script="/opt/ownswitch/current/bin/cli-restrict-check.php"
-  [[ -f "${_cli_script}" ]] || _cli_script="/opt/ownswitch-src/bin/cli-restrict-check.php"
-  if (( HAVE_EXEC )) && [[ -f "${_cli_script}" ]]; then
-    chmod 644 "${_cli_script}" 2>/dev/null || true
-    export OPENSIPS_CLI_RESTRICT_ROUTE='route[check_cli_restriction] {
-	$var(cli_user) = $au;
-	if ($var(cli_user) == NULL || $(var(cli_user){s.len}) == 0) {
-		$var(cli_user) = $dlg_val(os_src);
-	}
-	if ($var(cli_user) == NULL || $(var(cli_user){s.len}) == 0) {
-		return;
-	}
-	$var(cli_digits) = $(dlg_val(os_cli){re.subst,/[^0-9]//g});
-	if ($var(cli_digits) == NULL || $(var(cli_digits){s.len}) < 3) {
-		$var(cli_digits) = $(fU{re.subst,/[^0-9]//g});
-	}
-	if ($var(cli_digits) == NULL || $(var(cli_digits){s.len}) < 3) {
-		return;
-	}
-	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_cli_script}"' $var(cli_user) $var(cli_digits)")) {
-		xlog("L_WARN", "CLI restricted user=$var(cli_user) cli=$var(cli_digits)\n");
-		acc_db_request("403 CLI restricted", "acc");
-		send_reply(403, "CLI restricted");
-		exit;
-	}
-}'
-    log_info "CLI restriction: exec → ${_cli_script}"
-  else
-    export OPENSIPS_CLI_RESTRICT_ROUTE='route[check_cli_restriction] {
-	return;
-}'
-    log_warn "CLI restriction: exec/cli-restrict-check missing — stub only"
-  fi
-fi
+# shellcheck disable=SC1090
+source "${_dial_helpers}"
 
 # Fail2ban feed: copy digest-auth failure lines into /var/log/opensips/auth.log
 install -d -m 0755 /var/log/opensips
@@ -1114,6 +717,12 @@ export DEFAULT_MEDIA_POLICY="${_default_media}"
 log_info "OpenSIPS DEFAULT_MEDIA_POLICY=${DEFAULT_MEDIA_POLICY}"
 
 # Safe stubs if limit routes were not injected above (missing exec/scripts)
+: "${OPENSIPS_PREPARE_DIAL_ROUTE:=route[prepare_customer_dial] {
+	return;
+}}"
+: "${OPENSIPS_TRUNK_GATE_ROUTE:=route[check_trunk_gate] {
+	return;
+}}"
 : "${OPENSIPS_SIP_LIMIT_ROUTE:=route[check_sip_limits] {
 	return;
 }}"
@@ -1129,7 +738,7 @@ log_info "OpenSIPS DEFAULT_MEDIA_POLICY=${DEFAULT_MEDIA_POLICY}"
 : "${OPENSIPS_SIP_PROFILE_ROUTE:=route[load_sip_profile] {
 	return;
 }}"
-export OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE OPENSIPS_CALLERID_ROUTE OPENSIPS_TRUNK_CALLERID_ROUTE OPENSIPS_SIP_PROFILE_ROUTE
+export OPENSIPS_PREPARE_DIAL_ROUTE OPENSIPS_TRUNK_GATE_ROUTE OPENSIPS_SIP_LIMIT_ROUTE OPENSIPS_TRUNK_LIMIT_ROUTE OPENSIPS_CALLERID_ROUTE OPENSIPS_TRUNK_CALLERID_ROUTE OPENSIPS_SIP_PROFILE_ROUTE OPENSIPS_DST_REWRITE_ROUTE OPENSIPS_CUSTOMER_RATE_ROUTE OPENSIPS_RATE_CAP_ROUTE OPENSIPS_CLI_RESTRICT_ROUTE
 
 # ---------------------------------------------------------------------------
 # 6. Render + validate + activate cfg

@@ -369,9 +369,6 @@ route {
 	route(load_sip_profile);
 	# Keep customer-dialled digits (pre-rewrite) for logs; rating/DNC use rewritten
 	$dlg_val(os_dst_raw) = $rU;
-	# SIP-user destination prefix replace (2=12 → 213… becomes 1213…) BEFORE rate/CDR/vendor
-	route(apply_sip_dst_rewrite);
-	$dlg_val(os_dst) = $rU;
 	# Presented CLI starts as From user; apply_sip_cid replaces with display_name / fixed
 	$dlg_val(os_cli) = $fU;
 	$acc_extra(src) = $dlg_val(os_src);
@@ -385,13 +382,10 @@ route {
 		$dlg_val(os_dtmf) = "1";
 	}
 
-	# Softphone Display Name / fixed / passthrough, then SIP-user CallerID group.
-	# os_cli_user is the baseline restored on trunk failover before a trunk group (if any) replaces it.
+	# Softphone Display Name / fixed / passthrough (CallerID group applied after prepare)
 	route(apply_sip_cid);
-	route(apply_callerid_group);
-	$dlg_val(os_cli_user) = $dlg_val(os_cli);
 
-	# ACC before rate/DNC/limits rejects → failed CDRs for unrated / blocked / congestion
+	# ACC before prepare/DNC rejects → failed CDRs for unrated / blocked / congestion
 	if (!cgrates_auth()) {
 		xlog("L_WARN", "cgrates_auth failed user=$au to=$rU from=$si (continuing; portal allow_calls enforced)\n");
 	} else {
@@ -409,15 +403,15 @@ route {
 	t_on_reply("handle_reply");
 	t_on_failure("carrier_failover");
 
+	# One PHP fork: dst rewrite (if mapped) + rate/PP + SIP limits (if set) + SIP CallerID pick (if group)
+	# + feature flags so later DNC/CLI/CAP/trunk paths skip when unused.
+	route(prepare_customer_dial);
+	$dlg_val(os_dst) = $rU;
+	route(apply_callerid_group);
+	$dlg_val(os_cli_user) = $dlg_val(os_cli);
+
 	# SIP-user DNC: block before any trunk/vendor (post-rewrite digits in $rU / os_dst)
 	route(check_sip_dnc);
-
-	# No matching plan/tariff prefix → 403 + failed CDR only (never vendor)
-	# Also sets $avp(os_rplan) = trunk-group id (SIP-user TG overrides tariff TG)
-	route(check_customer_rate);
-
-	# SIP-user Channels + CPS after rewrite/rate (so congestion still has ACC)
-	route(check_sip_limits);
 
 	# do_routing(group) = portal trunk-group id from check_customer_rate
 	if ($avp(os_rplan) == NULL || $(avp(os_rplan){s.int}) <= 0) {
@@ -441,12 +435,10 @@ route {
 	route(apply_callerid_group);
 	route(check_cid_len);
 	route(apply_trunk_attrs);
-	route(apply_trunk_callerid);
+	# One PHP fork per trunk attempt: CAP (if set) + trunk limits (if set) + trunk CallerID (if cidg)
+	route(check_trunk_gate);
 	route(check_trunk_cid_len);
-	route(check_rate_cap);
-	# Trunk Channels + CPS — on exceed try next gw in this trunk group
-	route(check_trunk_limits);
-	# CLI restrict after CAP/limits (still before vendor INVITE)
+	# CLI restrict only when this SIP user has restriction lists assigned
 	route(check_cli_restriction);
 	route(apply_sip_dst_format);
 	route(apply_trunk_dst_format);
@@ -920,24 +912,23 @@ route[check_cid_len] {
 	}
 }
 
-# SIP-user destination prefix replace (bin/dial-dst-rewrite.php)
+# Single pre-route PHP fork (bin/dial-invite.php): rewrite + rate/PP + SIP limits + SIP CallerID + flags
+@@OPENSIPS_PREPARE_DIAL_ROUTE@@
+
+# Legacy stubs kept for local-AOR / failover compatibility (no-op when prepare already ran)
 @@OPENSIPS_DST_REWRITE_ROUTE@@
-
-# Customer tariff / plan-prefix match (bin/dial-rate-check.php) — reject unrated destinations
 @@OPENSIPS_CUSTOMER_RATE_ROUTE@@
-
-# Rate CAP: portal compares buy rate vs SIP-user CAP and trunk CAP (bin/dial-cap-check.php)
-# (OPENSIPS_RATE_CAP_ROUTE injected on its own line — never put multiline placeholders inside # comments)
-@@OPENSIPS_RATE_CAP_ROUTE@@
-
-# SIP-user Channels + CPS (bin/dial-sip-limit-check.php)
 @@OPENSIPS_SIP_LIMIT_ROUTE@@
 
-# Trunk Channels + CPS with next-route failover (bin/dial-trunk-limit-check.php)
-@@OPENSIPS_TRUNK_LIMIT_ROUTE@@
-
-# CallerID group: SIP-user pool (bin/dial-callerid-pick.php). Trunk cidg= is applied later.
+# CallerID group: apply dial-invite sip_cid (or pick only when has_usercidg=1)
 @@OPENSIPS_CALLERID_ROUTE@@
+
+# Single per-trunk PHP fork (bin/dial-trunk-gate.php): CAP + trunk limits + trunk CallerID
+@@OPENSIPS_TRUNK_GATE_ROUTE@@
+# Legacy stubs (skip when unused / already handled by trunk gate)
+@@OPENSIPS_RATE_CAP_ROUTE@@
+@@OPENSIPS_TRUNK_LIMIT_ROUTE@@
+@@OPENSIPS_TRUNK_CALLERID_ROUTE@@
 
 # Undo a previous trunk CallerID-group force before the next trunk's rules run.
 route[restore_user_cli] {
@@ -963,9 +954,6 @@ route[restore_user_cli] {
 	append_hf("Remote-Party-ID: <sip:$var(ru)@$var(rudom)>;party=calling;privacy=off;screen=yes\r\n");
 	xlog("L_INFO", "CLI restore baseline=$var(ru) before next trunk\n");
 }
-
-# Trunk CallerID group (attrs cidg=): force that pool onto the vendor and the CDR.
-@@OPENSIPS_TRUNK_CALLERID_ROUTE@@
 
 # IP-auth SIP profile (dncid/cid/media) when digest load_credentials did not run
 @@OPENSIPS_SIP_PROFILE_ROUTE@@
@@ -1112,10 +1100,8 @@ failure_route[carrier_failover] {
 		route(apply_callerid_group);
 		route(check_cid_len);
 		route(apply_trunk_attrs);
-		route(apply_trunk_callerid);
+		route(check_trunk_gate);
 		route(check_trunk_cid_len);
-		route(check_rate_cap);
-		route(check_trunk_limits);
 		route(check_cli_restriction);
 		route(apply_sip_dst_format);
 		route(apply_trunk_dst_format);
