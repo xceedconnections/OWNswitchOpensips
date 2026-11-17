@@ -22,11 +22,39 @@ final class RateResolver
     }
 
     /**
+     * @param bool $recoverStripped When true (CDR ingest/backfill), also try PP+dst for each plan prefix
+     *        if ACC stored only the stripped destination. Invite-time rating must keep this false.
      * @return array{rate:string,initial:int,subsequent:int,connect_fee:string,min_billable:int,charge_connect_on_zero:bool,
      *   prefix:string,destination:?string,source:string,rate_plan_id:int,version_id:?int,currency:string,routing_plan_id:?int,
      *   dial_prefix:string,plan_prefix_name:string,plan_prefix_id:?int,routed_destination:string}|null
      */
-    public function customer(int $customerId, string $dst): ?array
+    public function customer(int $customerId, string $dst, ?string $dialPrefixHint = null, bool $recoverStripped = false): ?array
+    {
+        $hint = preg_replace('/\D+/', '', (string) ($dialPrefixHint ?? '')) ?? '';
+        // ACC/CDR often store post-strip digits (tariff code). Re-attach PP so the same tariff row matches.
+        if ($hint !== '' && $dst !== '' && !str_starts_with($dst, $hint)) {
+            $withHint = $this->customerMatch($customerId, $hint . $dst);
+            if ($withHint !== null) {
+                return $withHint;
+            }
+        }
+        $direct = $this->customerMatch($customerId, $dst);
+        if ($direct !== null) {
+            return $direct;
+        }
+        if (!$recoverStripped || $dst === '') {
+            return null;
+        }
+        // Older ACC rows with no pp column: try each non-blank plan prefix once.
+        return $this->customerMatchViaPlanPrefixes($customerId, $dst);
+    }
+
+    /**
+     * @return array{rate:string,initial:int,subsequent:int,connect_fee:string,min_billable:int,charge_connect_on_zero:bool,
+     *   prefix:string,destination:?string,source:string,rate_plan_id:int,version_id:?int,currency:string,routing_plan_id:?int,
+     *   dial_prefix:string,plan_prefix_name:string,plan_prefix_id:?int,routed_destination:string}|null
+     */
+    private function customerMatch(int $customerId, string $dst): ?array
     {
         $c = $this->pdo->prepare('SELECT rate_plan_id FROM customers WHERE id = ?');
         $c->execute([$customerId]);
@@ -99,6 +127,48 @@ final class RateResolver
             $shaped['routing_plan_id'] = (int) $row['routing_plan_id'];
         }
         return $this->annotate($shaped, $dial, $lookup);
+    }
+
+    /**
+     * When ACC stored only the stripped destination, try PP+dst for each plan prefix.
+     *
+     * @return array{rate:string,initial:int,subsequent:int,connect_fee:string,min_billable:int,charge_connect_on_zero:bool,
+     *   prefix:string,destination:?string,source:string,rate_plan_id:int,version_id:?int,currency:string,routing_plan_id:?int,
+     *   dial_prefix:string,plan_prefix_name:string,plan_prefix_id:?int,routed_destination:string}|null
+     */
+    private function customerMatchViaPlanPrefixes(int $customerId, string $dst): ?array
+    {
+        if (!$this->planPrefixColumn() || $customerId <= 0 || $dst === '') {
+            return null;
+        }
+        try {
+            $c = $this->pdo->prepare('SELECT rate_plan_id FROM customers WHERE id = ?');
+            $c->execute([$customerId]);
+            $planId = (int) $c->fetchColumn();
+            if ($planId <= 0) {
+                return null;
+            }
+            $st = $this->pdo->prepare(
+                "SELECT prefix FROM plan_prefixes
+                 WHERE rate_plan_id = ? AND status = 'active' AND prefix <> ''
+                 ORDER BY CHAR_LENGTH(prefix) DESC, id ASC"
+            );
+            $st->execute([$planId]);
+            $prefixes = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        } catch (\Throwable) {
+            return null;
+        }
+        foreach ($prefixes as $prefix) {
+            $pp = preg_replace('/\D+/', '', (string) $prefix) ?? '';
+            if ($pp === '' || str_starts_with($dst, $pp)) {
+                continue;
+            }
+            $hit = $this->customerMatch($customerId, $pp . $dst);
+            if ($hit !== null) {
+                return $hit;
+            }
+        }
+        return null;
     }
 
     /**

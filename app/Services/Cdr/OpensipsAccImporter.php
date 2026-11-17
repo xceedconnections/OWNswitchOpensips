@@ -275,6 +275,7 @@ final class OpensipsAccImporter
             }
         }
 
+        $planPrefix = preg_replace('/\D+/', '', (string) ($row['pp'] ?? '')) ?? '';
         $payload = [
             'external_cdr_key' => 'osacc:' . $table . ':' . ($row['id'] ?? $callid),
             'sip_call_id' => mb_substr($callid, 0, 190),
@@ -292,6 +293,9 @@ final class OpensipsAccImporter
             'sip_response' => $code > 0 ? $code : null,
             'failure_reason' => $reason !== '' ? mb_substr($reason, 0, 190) : ($code > 0 ? ('SIP ' . $code) : 'opensips_acc'),
         ];
+        if ($planPrefix !== '') {
+            $payload['plan_prefix'] = mb_substr($planPrefix, 0, 32);
+        }
         if ($trunkId !== null) {
             $payload['carrier_trunk_id'] = $trunkId;
         }

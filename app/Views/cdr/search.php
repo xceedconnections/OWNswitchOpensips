@@ -127,6 +127,7 @@ foreach ($result['rows'] as $tmpRow) {
             <?php if ($customers): ?><th>Customer</th><?php endif; ?>
             <th>SIP</th><?php if ($staff): ?><th>Dir</th><?php endif; ?>
             <th><?= sort_link('/cdrs', $sortQuery, 'src', 'CallerID', $sort, $dir) ?></th>
+            <th>PP</th>
             <th><?= sort_link('/cdrs', $sortQuery, 'dst_normalized', 'Destination', $sort, $dir) ?></th>
             <th>Description</th>
             <th><?= sort_link('/cdrs', $sortQuery, 'disposition', 'Result', $sort, $dir) ?></th>
@@ -192,6 +193,10 @@ foreach ($result['rows'] as $tmpRow) {
                 ?></td>
                 <?php endif; ?>
                 <td class="os-mono"><?= e($c['src'] ?? '—') ?></td>
+                <td class="os-mono"><?php
+                    $pp = trim((string) ($c['plan_prefix'] ?? ''));
+                    echo $pp !== '' ? e($pp) : '<span class="text-muted">—</span>';
+                ?></td>
                 <td class="os-mono"><?= e($c['dst_normalized']) ?></td>
                 <td><?php if (!empty($c['area_description'])): ?><span class="os-area-tag"><?= e((string) $c['area_description']) ?></span><?php else: ?><span class="text-muted">—</span><?php endif; ?></td>
                 <td><span class="badge text-bg-<?= e($dispCls) ?>"><?php

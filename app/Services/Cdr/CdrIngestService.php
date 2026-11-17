@@ -66,6 +66,7 @@ final class CdrIngestService
             'reseller_id' => $customer['reseller_id'] ?? null, 'customer_id' => $customer['id'] ?? null,
             'sip_account_id' => $att['sip_account_id'], 'ip_endpoint_id' => $att['ip_endpoint_id'],
             'src' => $d['src'], 'dst_raw' => $d['dst_raw'], 'dst_normalized' => $dst, 'dst_prefix' => null,
+            'plan_prefix' => $d['plan_prefix'] !== '' ? $d['plan_prefix'] : null,
             'carrier_trunk_id' => $d['carrier_trunk_id'], 'carrier_id' => null, 'routing_rule_id' => $d['routing_rule_id'],
             'setup_at' => $d['setup_at'], 'answer_at' => $d['answer_at'], 'end_at' => $d['end_at'],
             'duration_actual' => $duration, 'duration_billable_customer' => 0, 'duration_billable_carrier' => 0,
@@ -89,10 +90,17 @@ final class CdrIngestService
         $callId = $d['sip_call_id'];
 
         if ($answered && $customer !== null) {
-            $crate = $this->resolver->customer((int) $customer['id'], $dst);
+            $ppHint = (string) ($d['plan_prefix'] ?? '');
+            $crate = $this->resolver->customer((int) $customer['id'], $dst, $ppHint !== '' ? $ppHint : null, true);
             if ($crate === null) {
                 $row['settlement_status'] = 'unrated';   // no matching tariff: flagged for ops, never silently free
             } else {
+                if (($row['plan_prefix'] ?? null) === null || $row['plan_prefix'] === '') {
+                    $fromRate = preg_replace('/\D+/', '', (string) ($crate['dial_prefix'] ?? '')) ?? '';
+                    if ($fromRate !== '') {
+                        $row['plan_prefix'] = mb_substr($fromRate, 0, 32);
+                    }
+                }
                 $c = $this->rating->rate($crate['rate'], $crate['initial'], $crate['subsequent'], $duration, $crate['connect_fee'], $crate['charge_connect_on_zero'], $crate['min_billable']);
                 $row = array_merge($row, [
                     'dst_prefix' => $crate['prefix'] !== '' ? $crate['prefix'] : null,
@@ -247,6 +255,8 @@ final class CdrIngestService
             'hangup_initiator' => $str($raw['hangup_initiator'] ?? null, 32),
             'hangup_cause' => $str($raw['hangup_cause'] ?? null, 64),
             'sip_trace' => $str($raw['sip_trace'] ?? null, 60000),
+            'plan_prefix' => (($pp = preg_replace('/\D+/', '', (string) ($raw['plan_prefix'] ?? ''))) !== null && $pp !== '')
+                ? mb_substr($pp, 0, 32) : '',
         ], []];
     }
 

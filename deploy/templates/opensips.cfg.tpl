@@ -132,7 +132,7 @@ modparam("acc", "report_cancels", 1)
 # OpenSIPS 3.x: extra_fields + $acc_extra(...) — db_extra was removed
 # src = SIP username (attribution); cli = presented CallerID; gw = drouting gwid (T{trunkId})
 # talk = customer hangup seconds when Delayed Bye holds the carrier BYE (sell uses talk; ACC duration includes hold)
-modparam("acc", "extra_fields", "db: src->src_user; dst->dst_user; ip->src_ip; cli->cli; gw->gw; talk->talk")
+modparam("acc", "extra_fields", "db: src->src_user; dst->dst_user; ip->src_ip; cli->cli; gw->gw; talk->talk; pp->pp")
 
 # dynamic routing (carrier selection / failover) - data loaded from the opensips DB
 loadmodule "drouting.so"
@@ -772,6 +772,9 @@ route[acc_cli_gw] {
 	$acc_extra(src) = $dlg_val(os_src);
 	$acc_extra(dst) = $dlg_val(os_dst);
 	$acc_extra(ip) = $si;
+	if ($dlg_val(os_pp) != NULL && $(dlg_val(os_pp){s.len}) > 0) {
+		$acc_extra(pp) = $dlg_val(os_pp);
+	}
 	if ($dlg_val(os_cli) != NULL && $(dlg_val(os_cli){s.len}) > 0) {
 		$acc_extra(cli) = $dlg_val(os_cli);
 	} else {

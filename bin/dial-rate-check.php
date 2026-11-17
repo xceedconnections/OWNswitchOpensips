@@ -73,5 +73,7 @@ if ($routeDst === '' || strlen($routeDst) < 3) {
 }
 
 $pfx = (string) ($rate['prefix'] ?? '');
-fwrite(STDOUT, "ALLOW tariff={$pfx} rplan={$rplan} route_dst={$routeDst} rate=" . ($rate['rate'] ?? '') . "\n");
+$dialPfx = preg_replace('/\D+/', '', (string) ($rate['dial_prefix'] ?? '')) ?? '';
+$ppPart = $dialPfx !== '' ? " dial_prefix={$dialPfx}" : '';
+fwrite(STDOUT, "ALLOW tariff={$pfx} rplan={$rplan} route_dst={$routeDst} rate=" . ($rate['rate'] ?? '') . "{$ppPart}\n");
 exit(0);

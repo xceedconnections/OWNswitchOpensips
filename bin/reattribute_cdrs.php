@@ -141,16 +141,26 @@ foreach ($rows as $cdr) {
         continue;
     }
 
-    $crate = $needSell ? $resolver->customer($customerId, $dst) : null;
+    $ppHint = preg_replace('/\D+/', '', (string) ($cdr['plan_prefix'] ?? '')) ?? '';
+    $crate = $needSell ? $resolver->customer($customerId, $dst, $ppHint !== '' ? $ppHint : null, true) : null;
     if ($needSell && $crate === null) {
         $pdo->prepare("UPDATE cdrs SET settlement_status = 'unrated' WHERE id = ?")->execute([(int) $cdr['id']]);
-        echo "CDR #{$cdr['id']}: attributed but unrated (no customer tariff for {$dst})\n";
+        echo "CDR #{$cdr['id']}: attributed but unrated (no customer tariff for {$dst}"
+            . ($ppHint !== '' ? " pp={$ppHint}" : '') . ")\n";
         $needSell = false;
     }
 
     $c = null;
     if ($needSell && $crate !== null) {
         $c = $rating->rate($crate['rate'], $crate['initial'], $crate['subsequent'], $duration, $crate['connect_fee'], $crate['charge_connect_on_zero'], $crate['min_billable']);
+        $fromRate = preg_replace('/\D+/', '', (string) ($crate['dial_prefix'] ?? '')) ?? '';
+        if ($fromRate !== '' && $ppHint === '') {
+            try {
+                $pdo->prepare('UPDATE cdrs SET plan_prefix = ? WHERE id = ? AND (plan_prefix IS NULL OR plan_prefix = \'\')')
+                    ->execute([mb_substr($fromRate, 0, 32), (int) $cdr['id']]);
+            } catch (\Throwable) {
+            }
+        }
     }
 
     $carrierTotal = (string) ($cur['carrier_cost'] ?? '0.000000');

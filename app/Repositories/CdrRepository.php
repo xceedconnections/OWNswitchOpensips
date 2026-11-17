@@ -13,7 +13,7 @@ final class CdrRepository extends BaseRepository
 {
     public const COLUMNS = [
         'uuid', 'source_system', 'external_cdr_key', 'sip_call_id', 'reseller_id', 'customer_id', 'sip_account_id', 'ip_endpoint_id',
-        'src', 'dst_raw', 'dst_normalized', 'dst_prefix', 'carrier_id', 'carrier_trunk_id', 'routing_rule_id',
+        'src', 'dst_raw', 'dst_normalized', 'dst_prefix', 'plan_prefix', 'carrier_id', 'carrier_trunk_id', 'routing_rule_id',
         'setup_at', 'answer_at', 'end_at', 'duration_actual', 'duration_billable_customer', 'duration_billable_carrier',
         'customer_rate', 'carrier_rate', 'customer_initial', 'customer_subsequent', 'carrier_initial', 'carrier_subsequent',
         'customer_charge', 'carrier_cost', 'customer_connect_fee', 'carrier_connect_fee', 'gross_margin',
@@ -28,6 +28,24 @@ final class CdrRepository extends BaseRepository
     {
         parent::__construct($pdo, 'cdrs', self::COLUMNS, 'owned', ['src', 'dst_raw', 'dst_normalized', 'sip_call_id'],
             ['id', 'setup_at', 'duration_actual', 'customer_charge', 'carrier_cost', 'disposition']);
+        $this->ensurePlanPrefixColumn();
+    }
+
+    private function ensurePlanPrefixColumn(): void
+    {
+        static $done = false;
+        if ($done) {
+            return;
+        }
+        $done = true;
+        try {
+            $this->pdo->query('SELECT plan_prefix FROM cdrs LIMIT 0');
+        } catch (\Throwable) {
+            try {
+                $this->pdo->exec('ALTER TABLE cdrs ADD COLUMN plan_prefix VARCHAR(32) NULL AFTER dst_prefix');
+            } catch (\Throwable) {
+            }
+        }
     }
 
     public function findIdByKey(string $key): ?int

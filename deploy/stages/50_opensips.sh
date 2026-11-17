@@ -185,8 +185,9 @@ for _acc_tbl in acc missed_calls; do
   ensure_column "${_acc_tbl}" src_user 'src_user VARCHAR(64) NULL'
   ensure_column "${_acc_tbl}" dst_user 'dst_user VARCHAR(64) NULL'
   ensure_column "${_acc_tbl}" src_ip 'src_ip VARCHAR(45) NULL'
-  ensure_column "${_acc_tbl}" cli 'cli VARCHAR(64) NULL'
-  ensure_column "${_acc_tbl}" gw 'gw VARCHAR(64) NULL'
+	ensure_column "${_acc_tbl}" cli 'cli VARCHAR(64) NULL'
+	ensure_column "${_acc_tbl}" gw 'gw VARCHAR(64) NULL'
+	ensure_column "${_acc_tbl}" pp 'pp VARCHAR(32) NULL'
 done
 # Eyebeam / WebRTC Call-IDs often exceed CHAR(64)
 mysql_root "${DB_OPENSIPS}" -e "ALTER TABLE acc MODIFY callid VARCHAR(128) NOT NULL DEFAULT ''; ALTER TABLE missed_calls MODIFY callid VARCHAR(128) NOT NULL DEFAULT '';" 2>/dev/null || true
@@ -730,14 +731,20 @@ if [[ -z "${OPENSIPS_CUSTOMER_RATE_ROUTE:-}" ]]; then
 			$avp(os_rplan) = $(var(rp){s.int});
 		}
 		$var(rd) = $(var(rate_out){re.subst,/^.*route_dst=([0-9]+).*$/\1/s});
+		$var(pp) = $(var(rate_out){re.subst,/^.*dial_prefix=([0-9]+).*$/\1/s});
+		if ($var(pp) != NULL && $(var(pp){s.len}) > 0 && $var(pp) =~ "^[0-9]+$") {
+			$dlg_val(os_pp) = $var(pp);
+			$acc_extra(pp) = $var(pp);
+		}
 		if ($var(rd) != NULL && $(var(rd){s.len}) >= 3 && $var(rd) =~ "^[0-9]+$" && $var(rd) != $rU) {
-			xlog("L_INFO", "plan-prefix strip user=$var(rate_user) from=$rU to=$var(rd) tg=$avp(os_rplan)\n");
+			xlog("L_INFO", "plan-prefix strip user=$var(rate_user) from=$rU to=$var(rd) pp=$dlg_val(os_pp) tg=$avp(os_rplan)\n");
 			$rU = $var(rd);
 			$dlg_val(os_dst) = $var(rd);
+			# Keep ACC destination as routed tariff digits; PP is stored separately in acc.pp
 			$acc_extra(dst) = $var(rd);
 		}
 	}
-	xlog("L_INFO", "rated OK user=$var(rate_user) dst=$rU tg=$avp(os_rplan)\n");
+	xlog("L_INFO", "rated OK user=$var(rate_user) dst=$rU pp=$dlg_val(os_pp) tg=$avp(os_rplan)\n");
 }'
     usermod -aG ownswitch opensips 2>/dev/null || true
     chmod 755 "$(dirname "${_rate_script}")" 2>/dev/null || true
@@ -775,10 +782,13 @@ if [[ -z "${OPENSIPS_RATE_CAP_ROUTE:-}" ]]; then
 	if ($var(cap_user) == NULL || $(var(cap_user){s.len}) == 0) {
 		$var(cap_user) = $fU;
 	}
-	# Cap against post-rewrite / pre-strip dialled digits when available
+	# Cap against plan-prefix + routed digits (same tariff row as dial-time rating)
 	$var(cap_dst) = $dlg_val(os_dst);
 	if ($var(cap_dst) == NULL || $(var(cap_dst){s.len}) < 3) {
 		$var(cap_dst) = $rU;
+	}
+	if ($dlg_val(os_pp) != NULL && $(dlg_val(os_pp){s.len}) > 0) {
+		$var(cap_dst) = $dlg_val(os_pp) + $var(cap_dst);
 	}
 	$var(cap_out) = NULL;
 	if (!exec("env OWNSWITCH_ENV_FILE=/etc/ownswitch/ownswitch.env ${_php_dial} '"${_cap_script}"' $var(cap_user) $var(cap_dst) $var(tid)", , $var(cap_out))) {
